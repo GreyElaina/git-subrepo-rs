@@ -7,6 +7,6 @@
 remote = /tmp/git-subrepo-cycle2.ueEmMy/B
 branch = master
 commit = 77a82216eed70df60fa4171d5f64283c202697cb
-parent = ac200f301f449135fe42244d5d195f46b3c4775e
+parent = 577663b7851aaa69607e76f12b21ef73e9e964e2
 method = merge
 cmdver = 0.4.9
