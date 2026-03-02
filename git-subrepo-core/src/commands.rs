@@ -1933,6 +1933,11 @@ fn apply_tree_into_subdir(
     }
 
     index.sort_entries();
+
+    // We modify index entries directly. Invalidate the cache-tree extension so Git doesn't
+    // accidentally write commits using stale tree data.
+    let _ = index.remove_tree();
+
     index.write(Default::default()).into_subrepo_result()?;
 
     // Avoid reordering of operations by the compiler across file-system boundaries.
