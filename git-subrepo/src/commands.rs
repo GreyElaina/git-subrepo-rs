@@ -318,9 +318,6 @@ pub struct PatchesArgs {
     pub from_ref: Option<String>,
     pub since_sync: bool,
 
-    pub update_ref: bool,
-    pub ref_name: Option<String>,
-
     pub style: PatchesStyle,
     pub reverse: bool,
 }
@@ -328,35 +325,6 @@ pub struct PatchesArgs {
 pub fn patches(args: PatchesArgs) -> Result<String> {
     let repo = git_subrepo_core::repo::discover_repo()?;
     let state = ensure_repo_is_ready(&repo, "patches", true, false)?;
-
-    if args.update_ref {
-        let Some(subdir) = args.subdir.as_deref() else {
-            return Err(Error::user(
-                "Command 'patches' requires a subdir when using '--update-ref'.",
-            ));
-        };
-        if args.all || args.all_all {
-            return Err(Error::user(
-                "Command 'patches' does not support '--all/--ALL' with '--update-ref'.",
-            ));
-        }
-
-        let subdir = subdir::normalize_subdir(subdir)?;
-        let subref = subdir::encode_subdir(&subdir)?;
-        let refs = SubrepoRefs::new(&subref);
-
-        let ref_name = args.ref_name.unwrap_or_else(|| refs.refs_sync.clone());
-        let head = git_rev_parse_commit(&state.workdir, "HEAD")?;
-        repo.reference(
-            ref_name.as_str(),
-            head,
-            gix::refs::transaction::PreviousValue::Any,
-            "",
-        )
-        .into_subrepo_result()?;
-
-        return Ok(format!("Updated ref '{ref_name}' to {head}."));
-    }
 
     if (args.since.is_some() as u8) + (args.from_ref.is_some() as u8) + (args.since_sync as u8) > 1
     {
@@ -474,7 +442,7 @@ fn resolve_patches_base(
     Err(Error::user(format!(
         "Cannot determine sync base for '{subdir}'.\n\
 Run 'git subrepo patches {subdir} --since <rev>' or\n\
-  'git subrepo patches {subdir} --update-ref' (updates refs/subrepo/<subref>/sync)."
+  'git subrepo patches {subdir} --from-ref <ref>'."
     )))
 }
 
@@ -508,7 +476,7 @@ fn is_sync_anchor_for_subdir(message: &str, subdir: &str) -> bool {
     };
 
     let cmd = rest.split_whitespace().next().unwrap_or("");
-    if !matches!(cmd, "clone" | "pull" | "commit" | "push") {
+    if !matches!(cmd, "clone" | "pull" | "commit") {
         return false;
     }
 
@@ -1007,10 +975,8 @@ pub fn push(args: PushArgs) -> Result<String> {
         )?,
     };
 
-    git_commit_then_update_sync_ref(
+    git_commit(
         &state.workdir,
-        &repo,
-        &refs,
         CommitMessageSpec {
             message: Some(msg),
             message_file: args.message_file,

@@ -257,8 +257,6 @@ Common options:
 
 - `--style <oneline|decorate|stat|name-status>`
 - `--reverse`
-- `--update-ref` (writes `refs/subrepo/<subref>/sync`)
-- `--ref-name <ref>`
 
 ### `git subrepo config <subdir> <option> [<value>]`
 

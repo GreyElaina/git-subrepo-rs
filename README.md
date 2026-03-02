@@ -34,7 +34,6 @@ git subrepo patches [<subdir>|--all|-A]
                  [--style <style>]
                  [--reverse]
 
-git subrepo patches <subdir> --update-ref [--ref-name <ref>]
 ```
 
 ## Description
@@ -153,7 +152,7 @@ Read or update configuration values in `subdir/.gitrepo`.
 List local mainline commits affecting a subrepo subdirectory since the last sync.
 
 - Default base: `refs/subrepo/<subref>/sync` (if present), otherwise a commit-message anchor.
-- Use `--since`, `--from-ref`, or `--update-ref` for explicit control.
+- Use `--since` or `--from-ref` for explicit control.
 
 ## Testing
 

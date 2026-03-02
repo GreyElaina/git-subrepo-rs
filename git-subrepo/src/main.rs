@@ -427,7 +427,7 @@ struct ConfigCmd {
 #[derive(Debug, Args)]
 #[command(
     about = "Show local mainline commits affecting a subrepo since the last sync",
-    after_help = "Examples:\n  git subrepo patches vendor/repo\n  git subrepo patches vendor/repo --since HEAD~20\n  git subrepo patches vendor/repo --update-ref\n  git subrepo patches --all\n"
+    after_help = "Examples:\n  git subrepo patches vendor/repo\n  git subrepo patches vendor/repo --since HEAD~20\n  git subrepo patches vendor/repo --from-ref HEAD~50\n  git subrepo patches --all\n"
 )]
 struct PatchesCmd {
     #[arg(
@@ -467,16 +467,6 @@ struct PatchesCmd {
         help = "Force commit-message anchor detection (ignore refs/subrepo/<subref>/sync)"
     )]
     since_sync: bool,
-
-    #[arg(long = "update-ref", help = "Update the sync ref to the current HEAD")]
-    update_ref: bool,
-
-    #[arg(
-        long = "ref-name",
-        value_name = "REF",
-        help = "Ref name to update when using --update-ref (defaults to refs/subrepo/<subref>/sync)"
-    )]
-    ref_name: Option<String>,
 
     #[arg(
         long = "style",
@@ -695,8 +685,6 @@ fn try_main() -> Result<()> {
                 since: cmd.since,
                 from_ref: cmd.from_ref,
                 since_sync: cmd.since_sync,
-                update_ref: cmd.update_ref,
-                ref_name: cmd.ref_name,
                 style: cmd.style.into(),
                 reverse: cmd.reverse,
             })?;
