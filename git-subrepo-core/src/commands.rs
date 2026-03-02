@@ -92,6 +92,7 @@ pub fn clone(args: CloneArgs) -> Result<String> {
         upstream_tree_id,
         &gitrepo_content,
         args.force,
+        args.force,
     )?;
 
     repo.reference(
@@ -531,6 +532,7 @@ pub fn pull(args: PullArgs) -> Result<String> {
             &subdir,
             upstream_tree_id,
             &gitrepo_content,
+            true,
             true,
         )?;
 
@@ -1489,6 +1491,7 @@ fn commit_subrepo_to_mainline(
         merged_tree_id,
         &gitrepo_content,
         true,
+        opts.force,
     )?;
 
     let message = match opts.message {
@@ -1558,6 +1561,7 @@ fn apply_tree_into_subdir(
     tree_id: gix::ObjectId,
     gitrepo_content: &str,
     overwrite_existing: bool,
+    allow_untracked_overwrite: bool,
 ) -> Result<()> {
     use std::collections::HashSet;
     use std::ffi::OsStr;
@@ -1588,6 +1592,15 @@ fn apply_tree_into_subdir(
         let p = e.path(&index);
         if p.starts_with(prefix_bstr) {
             old_paths.insert(p.to_vec());
+        }
+    }
+
+    let mut old_parent_dirs: HashSet<Vec<u8>> = HashSet::new();
+    for p in &old_paths {
+        for (idx, b) in p.iter().enumerate() {
+            if *b == b'/' {
+                old_parent_dirs.insert(p[..idx].to_vec());
+            }
         }
     }
 
@@ -1626,7 +1639,119 @@ fn apply_tree_into_subdir(
         });
     }
 
-    let new_paths: HashSet<Vec<u8>> = specs.iter().map(|s| s.path.clone()).collect();
+    let mut new_paths: HashSet<Vec<u8>> = HashSet::new();
+    let mut new_parent_dirs: HashSet<Vec<u8>> = HashSet::new();
+    for s in &specs {
+        new_paths.insert(s.path.clone());
+        for (idx, b) in s.path.iter().enumerate() {
+            if *b == b'/' {
+                new_parent_dirs.insert(s.path[..idx].to_vec());
+            }
+        }
+    }
+
+    if !allow_untracked_overwrite {
+        let mut excludes = repo
+            .excludes(
+                &index,
+                None,
+                gix_worktree::stack::state::ignore::Source::WorktreeThenIdMappingIfNotSkipped,
+            )
+            .into_subrepo_result()?;
+
+        let mut untracked_files: Vec<Vec<u8>> = Vec::new();
+        let mut conflicts: Vec<Vec<u8>> = Vec::new();
+        let subdir_root = workdir.join(subdir);
+
+        if subdir_root.is_dir() {
+            let mut dirs = vec![subdir_root];
+            while let Some(dir) = dirs.pop() {
+                for entry in std::fs::read_dir(&dir)? {
+                    let entry = entry?;
+                    let ty = entry.file_type()?;
+                    let path = entry.path();
+
+                    let rel = path.strip_prefix(workdir).map_err(Error::internal)?;
+
+                    #[cfg(unix)]
+                    let rel_bytes: Vec<u8> = rel.as_os_str().as_bytes().to_vec();
+
+                    #[cfg(not(unix))]
+                    let rel_bytes: Vec<u8> = rel
+                        .to_string_lossy()
+                        .replace(std::path::MAIN_SEPARATOR, "/")
+                        .into_bytes();
+
+                    if ty.is_dir() {
+                        let platform = excludes.at_path(rel, Some(gix_index::entry::Mode::DIR))?;
+                        if platform.is_excluded() {
+                            continue;
+                        }
+
+                        if new_paths.contains(&rel_bytes) && !old_parent_dirs.contains(&rel_bytes) {
+                            conflicts.push(rel_bytes);
+                            continue;
+                        }
+
+                        dirs.push(path);
+                        continue;
+                    }
+
+                    if old_paths.contains(&rel_bytes) {
+                        continue;
+                    }
+
+                    let platform = excludes.at_path(rel, None)?;
+                    if platform.is_excluded() {
+                        continue;
+                    }
+
+                    untracked_files.push(rel_bytes);
+                }
+            }
+        }
+
+        for u in &untracked_files {
+            if new_paths.contains(u) || new_parent_dirs.contains(u) {
+                conflicts.push(u.clone());
+                continue;
+            }
+
+            for (idx, b) in u.iter().enumerate() {
+                if *b != b'/' {
+                    continue;
+                }
+
+                if new_paths.contains(&u[..idx].to_vec()) {
+                    conflicts.push(u.clone());
+                    break;
+                }
+            }
+        }
+
+        if !conflicts.is_empty() {
+            conflicts.sort();
+            conflicts.dedup();
+
+            let mut msg = String::new();
+            msg.push_str("Untracked working tree files would be overwritten by checkout:\n");
+            for p in conflicts {
+                msg.push_str("  ");
+                msg.push_str(&String::from_utf8_lossy(&p));
+                msg.push('\n');
+            }
+
+            return Err(Error::user(msg.trim_end().to_string()));
+        }
+
+        if std::env::var_os("GIT_SUBREPO_ADVISE_UNTRACKED").is_some() && !untracked_files.is_empty()
+        {
+            eprintln!(
+                "git-subrepo: warning: '{}' contains non-ignored untracked files; consider updating .gitignore",
+                subdir
+            );
+        }
+    }
 
     let mut to_delete: Vec<Vec<u8>> = old_paths.difference(&new_paths).cloned().collect();
     // Delete deeper paths first so directory cleanup is safe.
@@ -1700,7 +1825,7 @@ fn apply_tree_into_subdir(
 
     let should_interrupt = AtomicBool::new(false);
     let odb = repo.objects.clone().into_arc().into_subrepo_result()?;
-    let _outcome = gix_worktree_state::checkout(
+    let outcome = gix_worktree_state::checkout(
         &mut temp_index,
         workdir,
         odb,
@@ -1710,6 +1835,21 @@ fn apply_tree_into_subdir(
         opts,
     )
     .into_subrepo_result()?;
+
+    if !outcome.errors.is_empty() {
+        return Err(Error::user("Checkout failed."));
+    }
+
+    if !allow_untracked_overwrite && !outcome.collisions.is_empty() {
+        let mut msg = String::new();
+        msg.push_str("Checkout had collisions:\n");
+        for c in outcome.collisions {
+            msg.push_str("  ");
+            msg.push_str(&c.path.to_string());
+            msg.push('\n');
+        }
+        return Err(Error::user(msg.trim_end().to_string()));
+    }
 
     // Ensure the `.gitrepo` file content is present on disk (checkout writes it, but be explicit).
     std::fs::create_dir_all(workdir.join(subdir))?;
@@ -1804,6 +1944,7 @@ mod apply_tree_tests {
             }
             .format()
             .as_str(),
+            true,
             true,
         )
         .expect("apply");

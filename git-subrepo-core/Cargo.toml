@@ -10,7 +10,7 @@ workspace = true
 
 [dependencies]
 thiserror.workspace = true
-gix = { workspace = true, features = ["blocking-network-client", "blocking-http-transport-curl", "merge", "revision", "tree-editor", "worktree-mutation", "index", "attributes"] }
+gix = { workspace = true, features = ["blocking-network-client", "blocking-http-transport-curl", "merge", "revision", "tree-editor", "worktree-mutation", "index", "attributes", "excludes"] }
 
 gix-config.workspace = true
 
