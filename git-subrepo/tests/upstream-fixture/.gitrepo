@@ -4,7 +4,7 @@
 ; git-subrepo command. See https://github.com/ingydotnet/git-subrepo#readme
 ;
 [subrepo]
-remote = ../git-subrepo
+remote = https://github.com/ingydotnet/git-subrepo
 branch = master
 commit = 5e0f401f877cb54c4462766eec88e3c5f23d39a6
 parent = fe779bf38d85ddbf539cb695f92952194ba07d4b
