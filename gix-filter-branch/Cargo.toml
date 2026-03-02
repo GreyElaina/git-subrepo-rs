@@ -10,5 +10,4 @@ workspace = true
 
 [dependencies]
 thiserror.workspace = true
-
-gix = { workspace = true, features = ["tree-editor"] }
+gix = { workspace = true, features = ["revision", "tree-editor"] }

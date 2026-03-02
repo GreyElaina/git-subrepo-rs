@@ -135,6 +135,37 @@ fn baseline_filter_branch(repo: &Path) {
     );
 }
 
+fn build_merge_fixture(repo: &Path) {
+    let st = GitRepoState {
+        remote: "none".to_string(),
+        branch: "master".to_string(),
+        commit: "".to_string(),
+        parent: "".to_string(),
+        method: JoinMethod::Merge,
+        cmdver: git_subrepo_core::VERSION.to_string(),
+    };
+
+    write_text(&repo.join("bar/.gitrepo"), &st.format());
+    write_text(&repo.join("bar/file"), "a\n");
+    run_checked(repo, &["add", "-A"]);
+    run_checked(repo, &["commit", "-q", "-m", "A"]);
+
+    run_checked(repo, &["checkout", "-q", "-b", "side"]);
+    write_text(&repo.join("bar/file"), "side\n");
+    run_checked(repo, &["add", "-A"]);
+    run_checked(repo, &["commit", "-q", "-m", "S1"]);
+
+    run_checked(repo, &["checkout", "-q", "master"]);
+    write_text(&repo.join("bar/file"), "main\n");
+    run_checked(repo, &["add", "-A"]);
+    run_checked(repo, &["commit", "-q", "-m", "M1"]);
+
+    run_checked(
+        repo,
+        &["merge", "--no-ff", "-q", "side", "-m", "merge side"],
+    );
+}
+
 #[test]
 fn gix_rewrite_without_parent_matches_filter_branch_linear_history() {
     let tmp = tempfile::tempdir().expect("tempdir");
@@ -192,6 +223,80 @@ fn gix_rewrite_without_parent_matches_filter_branch_linear_history() {
     }
 
     // Cleanup worktree produced by branch.
+    let _ = git_subrepo_core::clean(git_subrepo_core::CleanArgs {
+        subdir: "bar".to_string(),
+        force: true,
+    });
+}
+
+#[test]
+fn gix_rewrite_without_parent_matches_filter_branch_with_merge_history() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+
+    let repo_gix = tmp.path().join("repo_gix");
+    let repo_baseline = tmp.path().join("repo_baseline");
+
+    fs::create_dir_all(&repo_gix).expect("mkdir");
+    fs::create_dir_all(&repo_baseline).expect("mkdir");
+
+    init_repo(&repo_gix);
+    build_merge_fixture(&repo_gix);
+
+    let out = Command::new("git")
+        .args([
+            "clone",
+            "-q",
+            repo_gix.to_string_lossy().as_ref(),
+            repo_baseline.to_string_lossy().as_ref(),
+        ])
+        .current_dir(tmp.path())
+        .output()
+        .expect("git clone");
+    if !out.status.success() {
+        panic!(
+            "git clone failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    let _guard = CWD_LOCK.lock().expect("lock cwd");
+    let cwd = std::env::current_dir().expect("cwd");
+    std::env::set_current_dir(&repo_gix).expect("chdir");
+    let _out = git_subrepo_core::branch(BranchArgs {
+        subdir: "bar".to_string(),
+        force: true,
+        fetch: false,
+    })
+    .expect("branch");
+    std::env::set_current_dir(cwd).expect("restore cwd");
+
+    baseline_filter_branch(&repo_baseline);
+
+    let gix_count = run_stdout(&repo_gix, &["rev-list", "--count", "subrepo/bar"]);
+    let base_count = run_stdout(&repo_baseline, &["rev-list", "--count", "subrepo/bar"]);
+    assert_eq!(gix_count, base_count);
+
+    let gix_merges = run_stdout(
+        &repo_gix,
+        &["rev-list", "--merges", "--count", "subrepo/bar"],
+    );
+    let base_merges = run_stdout(
+        &repo_baseline,
+        &["rev-list", "--merges", "--count", "subrepo/bar"],
+    );
+    assert_eq!(gix_merges, base_merges);
+
+    let gix_tip = run_stdout(&repo_gix, &["rev-parse", "subrepo/bar"]);
+    let base_tip = run_stdout(&repo_baseline, &["rev-parse", "subrepo/bar"]);
+    assert_eq!(
+        tree_id(&repo_gix, &gix_tip),
+        tree_id(&repo_baseline, &base_tip)
+    );
+
+    assert!(!has_gitrepo(&repo_gix, &gix_tip));
+    assert!(!has_gitrepo(&repo_baseline, &base_tip));
+
     let _ = git_subrepo_core::clean(git_subrepo_core::CleanArgs {
         subdir: "bar".to_string(),
         force: true,

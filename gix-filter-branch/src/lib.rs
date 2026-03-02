@@ -48,6 +48,113 @@ impl Default for Options {
     }
 }
 
+/// Equivalent to `git filter-branch --subdirectory-filter <subdir> --prune-empty`.
+///
+/// If `stop_at_exclusive` is set, it acts like limiting the range to `stop_at_exclusive..tip`.
+///
+/// Note that `git filter-branch` rewrites the commit graph, not just the first-parent chain.
+/// This function follows that model and preserves merges.
+pub fn subdirectory_filter(
+    repo: &gix::Repository,
+    tip: gix::ObjectId,
+    stop_at_exclusive: Option<gix::ObjectId>,
+    subdir: &str,
+    opts: Options,
+) -> Result<gix::ObjectId> {
+    use gix::revision::walk::Sorting;
+
+    let empty_tree = repo.empty_tree().id;
+
+    let walk = match stop_at_exclusive {
+        Some(stop) => repo
+            .rev_walk([tip])
+            .with_hidden([stop])
+            .sorting(Sorting::BreadthFirst)
+            .all()
+            .into_other()?,
+        None => repo
+            .rev_walk([tip])
+            .sorting(Sorting::BreadthFirst)
+            .all()
+            .into_other()?,
+    };
+
+    // We want a topological order (parents before children) for rewriting.
+    // `BreadthFirst` returns tips first, so reversing yields ancestors first.
+    let mut topo: Vec<gix::ObjectId> = Vec::new();
+    for item in walk {
+        let info = item.into_other()?;
+        topo.push(info.id);
+    }
+    topo.reverse();
+
+    let mut commit_map: HashMap<gix::ObjectId, gix::ObjectId> = HashMap::new();
+    let mut tree_map: HashMap<gix::ObjectId, gix::ObjectId> = HashMap::new();
+    let mut tree_cache: HashMap<gix::ObjectId, gix::ObjectId> = HashMap::new();
+
+    for id in topo {
+        let commit = repo.find_commit(id).into_other()?;
+
+        let parent_ids: Vec<gix::ObjectId> = commit.parent_ids().map(|p| p.detach()).collect();
+        let is_merge = parent_ids.len() > 1;
+
+        let new_tree = subtree_tree_id_at_commit(repo, id, subdir)?.unwrap_or(empty_tree);
+
+        if opts.prune_empty && !is_merge {
+            if let Some(first_parent) = parent_ids.first().copied() {
+                let parent_tree = if let Some(tree) = tree_map.get(&first_parent) {
+                    *tree
+                } else if let Some(tree) = tree_cache.get(&first_parent) {
+                    *tree
+                } else {
+                    let tree = subtree_tree_id_at_commit(repo, first_parent, subdir)?
+                        .unwrap_or(empty_tree);
+                    tree_cache.insert(first_parent, tree);
+                    tree
+                };
+
+                if new_tree == parent_tree {
+                    let replacement = commit_map
+                        .get(&first_parent)
+                        .copied()
+                        .unwrap_or(first_parent);
+                    commit_map.insert(id, replacement);
+                    tree_map.insert(id, parent_tree);
+                    continue;
+                }
+            }
+        }
+
+        let author_owned = commit.author().into_other()?.to_owned().into_other()?;
+        let committer_owned = commit.committer().into_other()?.to_owned().into_other()?;
+
+        let mut author_time = gix::date::parse::TimeBuf::default();
+        let author = author_owned.to_ref(&mut author_time);
+
+        let mut committer_time = gix::date::parse::TimeBuf::default();
+        let committer = committer_owned.to_ref(&mut committer_time);
+
+        let message = commit.message_raw_sloppy().to_str_lossy().into_owned();
+
+        let mut parents: Vec<gix::ObjectId> = Vec::new();
+        for p in parent_ids {
+            parents.push(commit_map.get(&p).copied().unwrap_or(p));
+        }
+
+        let new_commit = repo
+            .new_commit_as(committer, author, message, new_tree, parents)
+            .into_other()?;
+
+        commit_map.insert(id, new_commit.id);
+        tree_map.insert(id, new_tree);
+    }
+
+    commit_map
+        .get(&tip)
+        .copied()
+        .ok_or_else(|| FilterBranchError::user("Filter produced no commits"))
+}
+
 /// Equivalent to `git filter-branch --tree-filter "rm -f <path>" --prune-empty --first-parent`.
 ///
 /// If `stop_at_exclusive` is set, it acts like limiting the range to `stop_at_exclusive..tip` along the first-parent chain.
