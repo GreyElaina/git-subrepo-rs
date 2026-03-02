@@ -508,41 +508,7 @@ pub fn pull(args: PullArgs) -> Result<String> {
 
     // `--force` for pull behaves like `clone --force` upstream, but keeps the `pull` UX.
     if args.force {
-        let upstream_tree_id = repo
-            .find_commit(upstream_head)
-            .into_subrepo_result()?
-            .tree_id()
-            .into_subrepo_result()?
-            .detach();
-
         let upstream_head_str = upstream_head.to_string();
-
-        gitrepo.commit = upstream_head_str.clone();
-        gitrepo.parent = state
-            .head_commit
-            .expect("head commit is required")
-            .to_string();
-        gitrepo.cmdver = VERSION.to_string();
-
-        let gitrepo_content = gitrepo.format();
-
-        apply_tree_into_subdir(
-            &repo,
-            &state.workdir,
-            &subdir,
-            upstream_tree_id,
-            &gitrepo_content,
-            true,
-            true,
-        )?;
-
-        repo.reference(
-            refs.refs_commit.as_str(),
-            upstream_head,
-            gix::refs::transaction::PreviousValue::Any,
-            "",
-        )
-        .into_subrepo_result()?;
 
         let msg = match args.message {
             Some(m) => m,
@@ -558,12 +524,20 @@ pub fn pull(args: PullArgs) -> Result<String> {
             )?,
         };
 
-        git_commit(
-            &state.workdir,
-            CommitMessageSpec {
+        commit_subrepo_to_mainline(
+            &repo,
+            &state,
+            &subdir,
+            &refs,
+            &mut gitrepo,
+            upstream_head,
+            upstream_head_str.as_str(),
+            CommitOptions {
+                command: "pull",
                 message: Some(msg),
                 message_file: args.message_file,
                 edit: args.edit,
+                force: true,
             },
         )?;
 
@@ -1569,6 +1543,19 @@ fn apply_tree_into_subdir(
 
     use gix::bstr::ByteSlice;
 
+    fn is_quiet_mode() -> bool {
+        matches!(
+            std::env::var("GIT_SUBREPO_QUIET").as_deref(),
+            Ok("1") | Ok("true") | Ok("yes")
+        )
+    }
+
+    fn advise_untracked_enabled(repo: &gix::Repository) -> bool {
+        repo.config_snapshot()
+            .boolean("subrepo.adviseUntracked")
+            .unwrap_or(true)
+    }
+
     #[cfg(unix)]
     use std::os::unix::ffi::OsStrExt;
 
@@ -1729,6 +1716,71 @@ fn apply_tree_into_subdir(
             }
         }
 
+        // Remove tracked paths that would block checkout due to directory <-> file transitions.
+        let mut pre_delete: Vec<Vec<u8>> = Vec::new();
+        for p in &old_paths {
+            if new_parent_dirs.contains(p) {
+                pre_delete.push(p.clone());
+                continue;
+            }
+
+            for (idx, b) in p.iter().enumerate() {
+                if *b != b'/' {
+                    continue;
+                }
+                if new_paths.contains(&p[..idx].to_vec()) {
+                    pre_delete.push(p.clone());
+                    break;
+                }
+            }
+        }
+
+        // Delete deeper paths first so directory cleanup is safe.
+        pre_delete.sort_by_key(|p| std::cmp::Reverse(p.len()));
+        for path in &pre_delete {
+            #[cfg(unix)]
+            let os_path = OsStr::from_bytes(path);
+
+            #[cfg(not(unix))]
+            let os_path = OsStr::new(std::str::from_utf8(path).map_err(|_| {
+                Error::user("Invalid path encoding while removing old tracked files")
+            })?);
+
+            let full = workdir.join(os_path);
+            let meta = std::fs::symlink_metadata(&full);
+            match meta {
+                Ok(meta) if meta.is_dir() => {
+                    let _ = std::fs::remove_dir_all(&full);
+                }
+                Ok(_) => {
+                    let _ = std::fs::remove_file(&full);
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                Err(err) => return Err(err.into()),
+            }
+
+            // Remove empty parent directories up to `subdir/`.
+            if let Ok(rel) = full.strip_prefix(workdir.join(subdir)) {
+                let mut cur = rel.parent();
+                while let Some(dir) = cur {
+                    let abs = workdir.join(subdir).join(dir);
+                    if abs.as_os_str().is_empty() {
+                        break;
+                    }
+                    if abs
+                        .read_dir()
+                        .map(|mut it| it.next().is_none())
+                        .unwrap_or(false)
+                    {
+                        let _ = std::fs::remove_dir(&abs);
+                        cur = dir.parent();
+                        continue;
+                    }
+                    break;
+                }
+            }
+        }
+
         if !conflicts.is_empty() {
             conflicts.sort();
             conflicts.dedup();
@@ -1744,61 +1796,11 @@ fn apply_tree_into_subdir(
             return Err(Error::user(msg.trim_end().to_string()));
         }
 
-        if std::env::var_os("GIT_SUBREPO_ADVISE_UNTRACKED").is_some() && !untracked_files.is_empty()
-        {
+        if !is_quiet_mode() && advise_untracked_enabled(repo) && !untracked_files.is_empty() {
             eprintln!(
                 "git-subrepo: warning: '{}' contains non-ignored untracked files; consider updating .gitignore",
                 subdir
             );
-        }
-    }
-
-    let mut to_delete: Vec<Vec<u8>> = old_paths.difference(&new_paths).cloned().collect();
-    // Delete deeper paths first so directory cleanup is safe.
-    to_delete.sort_by_key(|p| std::cmp::Reverse(p.len()));
-
-    for path in &to_delete {
-        #[cfg(unix)]
-        let os_path = OsStr::from_bytes(path);
-
-        #[cfg(not(unix))]
-        let os_path =
-            OsStr::new(std::str::from_utf8(path).map_err(|_| {
-                Error::user("Invalid path encoding while removing old tracked files")
-            })?);
-
-        let full = workdir.join(os_path);
-        let meta = std::fs::symlink_metadata(&full);
-        match meta {
-            Ok(meta) if meta.is_dir() => {
-                let _ = std::fs::remove_dir_all(&full);
-            }
-            Ok(_) => {
-                let _ = std::fs::remove_file(&full);
-            }
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
-            Err(err) => return Err(err.into()),
-        }
-
-        // Remove empty parent directories up to `subdir/`.
-        if let Ok(rel) = full.strip_prefix(workdir.join(subdir)) {
-            let mut cur = rel.parent();
-            while let Some(dir) = cur {
-                let abs = workdir.join(subdir).join(dir);
-                if abs.as_os_str().is_empty() {
-                    break;
-                }
-                if abs
-                    .read_dir()
-                    .map(|mut it| it.next().is_none())
-                    .unwrap_or(false)
-                {
-                    let _ = std::fs::remove_dir(&abs);
-                    cur = dir.parent();
-                    continue;
-                }
-                break;
-            }
         }
     }
 
@@ -1848,7 +1850,59 @@ fn apply_tree_into_subdir(
             msg.push_str(&c.path.to_string());
             msg.push('\n');
         }
+        msg.push_str(
+            "Note: the working tree may be partially updated. If this happens repeatedly, it may indicate a missing pre-check.\n",
+        );
         return Err(Error::user(msg.trim_end().to_string()));
+    }
+
+    let mut to_delete: Vec<Vec<u8>> = old_paths.difference(&new_paths).cloned().collect();
+    // Delete deeper paths first so directory cleanup is safe.
+    to_delete.sort_by_key(|p| std::cmp::Reverse(p.len()));
+
+    for path in &to_delete {
+        #[cfg(unix)]
+        let os_path = OsStr::from_bytes(path);
+
+        #[cfg(not(unix))]
+        let os_path =
+            OsStr::new(std::str::from_utf8(path).map_err(|_| {
+                Error::user("Invalid path encoding while removing old tracked files")
+            })?);
+
+        let full = workdir.join(os_path);
+        let meta = std::fs::symlink_metadata(&full);
+        match meta {
+            Ok(meta) if meta.is_dir() => {
+                let _ = std::fs::remove_dir_all(&full);
+            }
+            Ok(_) => {
+                let _ = std::fs::remove_file(&full);
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => return Err(err.into()),
+        }
+
+        // Remove empty parent directories up to `subdir/`.
+        if let Ok(rel) = full.strip_prefix(workdir.join(subdir)) {
+            let mut cur = rel.parent();
+            while let Some(dir) = cur {
+                let abs = workdir.join(subdir).join(dir);
+                if abs.as_os_str().is_empty() {
+                    break;
+                }
+                if abs
+                    .read_dir()
+                    .map(|mut it| it.next().is_none())
+                    .unwrap_or(false)
+                {
+                    let _ = std::fs::remove_dir(&abs);
+                    cur = dir.parent();
+                    continue;
+                }
+                break;
+            }
+        }
     }
 
     // Ensure the `.gitrepo` file content is present on disk (checkout writes it, but be explicit).

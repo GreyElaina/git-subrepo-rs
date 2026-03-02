@@ -59,6 +59,11 @@ fn try_main() -> Result<()> {
     validate_command(&command)?;
     validate_options(&command, &opts)?;
 
+    if opts.quiet {
+        // Allow library code to respect quiet mode without threading a flag through every call.
+        std::env::set_var("GIT_SUBREPO_QUIET", "1");
+    }
+
     if opts.message.is_some() && opts.file.is_some() {
         return Err(anyhow!(
             "fatal: options '-m' and '--file' cannot be used together"
