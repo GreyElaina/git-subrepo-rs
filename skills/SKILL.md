@@ -1,140 +1,214 @@
 ---
-name: git-subrepo-rs
-description: Rust reimplementation of upstream Bash git-subrepo with output/behavior compatibility enforced by the upstream .t suite (run via cargo nextest).
+name: git-subrepo
+description: Usage guide for the `git subrepo` command (a Git submodule alternative) as implemented by this repository.
 ---
 
-# git-subrepo-rs
+# git-subrepo
 
-This skill documents the project-specific contract, layout, workflows, and guardrails for contributing to the Rust reimplementation of upstream Bash `git-subrepo`.
+`git subrepo` lets you vendor an external Git repository into a subdirectory of your repository, and then:
 
-## Contract (authoritative)
+- pull upstream changes into that subdirectory, and
+- push local subdirectory changes back upstream.
 
-- Behavioral and output compatibility with upstream Bash `git-subrepo`.
-- The vendored upstream `.t` test suite is the authoritative specification.
-- Prefer gitoxide (`gix`) for plumbing, but use the `git` CLI where porcelain UX/state parity is required.
+A subrepo is identified by the presence of a `<subdir>/.gitrepo` file.
 
-## Repository layout
+## When to use
 
-Workspace root contains these crates:
+Use `git subrepo` when you want a vendored copy of an external repository inside a subdirectory, but you want to avoid submodules.
 
-- `git-subrepo/`
-  - `src/main.rs`: CLI argument parsing and dispatch.
-  - `tests/upstream_suite.rs`: runs upstream tests from a temporary copy.
-- `git-subrepo-core/`
-  - `src/commands.rs`: command implementations (clone/init/fetch/branch/pull/push/commit/status/clean/config).
-  - `src/gitrepo.rs`: `.gitrepo` parsing/formatting.
-  - `src/remote.rs`: upstream fetch via `gix` remotes.
-- `gix-filter-branch/`
-  - History rewriting primitives used to match `git filter-branch` semantics.
-- `xtask/`
-  - Developer workflows (e.g. updating the upstream fixture).
+Typical use-cases:
 
-Upstream fixture:
+- vendor a library into `vendor/libname/`
+- maintain local patches, occasionally syncing upstream
+- contribute changes back upstream
 
-- `git-subrepo/tests/upstream-fixture`
-  - This repository may be managed as a subrepo and can contain a root `.gitrepo` which must be ignored by the upstream test runner when copying to a temporary repo.
+## Key concepts
 
-## How upstream tests are executed
+- **Subrepo directory**: the subdirectory that contains the vendored repository.
+- **`.gitrepo`**: INI-like metadata file stored at `<subdir>/.gitrepo`.
+- **Join method**: how the subrepo branch is joined with upstream during `pull`/`push` workflows (`merge` or `rebase`).
+- **Linked worktree**: on conflicts, a linked worktree is created under `<git-common-dir>/tmp/subrepo/<subref>` to resolve conflicts.
 
-- Test runner: `git-subrepo/tests/upstream_suite.rs`
-  - Copies `tests/upstream-fixture` into a temp dir.
-  - Initializes a new Git repo in the temp dir.
-  - Injects a `bin/git-subrepo` wrapper into `PATH` so the Rust binary is used.
-  - Skips copying the fixture root `.gitrepo` file.
+## Common workflows
 
-## Commands (developer)
+### Clone a subrepo into a subdirectory
 
 ```bash
-# Fast local tests
-cargo nextest run
-
-# Upstream compatibility suite (authoritative)
-cargo nextest run -p git-subrepo --features upstream-tests
-
-# Conformance/POC tests
-cargo nextest run -p git-subrepo-core --features poc-tests
-
-# Update the vendored upstream fixture
-cargo run -p xtask -- update-upstream-fixture
+git subrepo clone <remote-url> [<subdir>]
 ```
 
-## Implementation strategy
+Example:
 
-### Prefer `gix` for plumbing
+```bash
+git subrepo clone https://github.com/org/project vendor/project
+```
 
-Typical `gix`-friendly areas:
+### Initialize an existing directory as a subrepo
 
-- reference and object manipulation
-- tree/index/worktree checkout
-- remote fetch (including HTTP transport)
-- history traversal and rewriting (within the project-defined compatibility envelope)
+```bash
+git subrepo init <subdir>
+```
 
-### Use `git` CLI for porcelain parity
+If you know the upstream:
 
-Prefer the `git` CLI where UX/state parity matters and is difficult to reproduce reliably:
+```bash
+git subrepo init <subdir> --remote <remote-url> --branch <branch>
+```
 
-- linked worktrees (`git worktree add/prune`)
-- merge/rebase and conflict state
-- push to network remotes
-- commit message editing (`-e`) and file-based messages (`--file`), including hook execution
+### Pull upstream changes
 
-## Conflict workflow (upstream-compatible)
+```bash
+git subrepo pull <subdir>
+```
 
-- A linked worktree is created under `<git-common-dir>/tmp/subrepo/<subref>`.
-- If merge/rebase conflicts occur, users resolve them manually in the linked worktree.
-- Completion sequence:
+Notes:
+
+- If the subrepo is up to date, the command prints an up-to-date message.
+- On conflicts, resolve them in the linked worktree and then run `git subrepo commit`.
+
+### Push local changes upstream
+
+```bash
+git subrepo push <subdir>
+```
+
+### Conflict resolution workflow
+
+When `pull` or `push` requires a merge/rebase that conflicts:
+
+1. A linked worktree will exist at `<git-common-dir>/tmp/subrepo/<subref>`.
+2. Resolve conflicts in that worktree:
+
+```bash
+cd <worktree>
+git status
+# resolve conflicts
+git add -A
+# if rebase:
+git rebase --continue
+# if merge:
+git commit
+```
+
+3. Return to your original repo and finalize:
 
 ```bash
 git subrepo commit <subdir>
 git subrepo clean <subdir>
 ```
 
-- Cleanup includes a dirty-guard for tracked changes.
+## Command reference
+
+This implementation aims to match upstream semantics and output.
+
+### `git subrepo clone <remote> [<subdir>]`
+
+Clone the upstream repository into `<subdir>` and create `<subdir>/.gitrepo`.
+
+Common options:
+
+- `--branch <name>`
+- `--force` (reclone)
+- `--method <merge|rebase>`
+- `--message <msg>` / `--file <path>` / `--edit`
+
+### `git subrepo init <subdir>`
+
+Turn an existing subdirectory into a subrepo.
+
+Common options:
+
+- `--remote <url>`
+- `--branch <name>`
+- `--method <merge|rebase>`
+
+### `git subrepo fetch <subdir>`
+
+Fetch the upstream content and update internal subrepo refs.
+
+Common options:
+
+- `--remote <url>`
+- `--branch <name>`
+- `--force`
+
+### `git subrepo branch <subdir>`
+
+Create a `subrepo/<subdir>` branch containing commits relevant to `<subdir>`.
+
+Common options:
+
+- `--fetch`
+- `--force`
+
+### `git subrepo commit <subdir> [<subrepo-ref>]`
+
+Write the content of `<subrepo-ref>` (default: `subrepo/<subdir>`) into `<subdir>/` and create a single mainline commit.
+
+Common options:
+
+- `--fetch`
+- `--force`
+- `--message <msg>` / `--file <path>` / `--edit`
+
+### `git subrepo pull <subdir>`
+
+Fetch + branch + merge/rebase + commit.
+
+Common options:
+
+- `--remote <url>`
+- `--branch <name>`
+- `--update`
+- `--force`
+- `--message <msg>` / `--file <path>` / `--edit`
+
+### `git subrepo push <subdir>`
+
+Push local subrepo branch history upstream.
+
+Common options:
+
+- `--remote <url>`
+- `--branch <name>`
+- `--update`
+- `--force`
+- `--squash`
+- `--message <msg>` / `--file <path>`
+
+### `git subrepo status [<subdir>|--all|--ALL]`
+
+Show subrepo presence/status.
+
+Common options:
+
+- `--fetch`
+- `--quiet`
+
+### `git subrepo clean <subdir>|--all|--ALL`
+
+Remove artifacts created by `fetch` and `branch` (refs, branches, linked worktrees).
+
+Common options:
+
+- `--force`
+
+### `git subrepo config <subdir> <option> [<value>]`
+
+Read or update values in `<subdir>/.gitrepo`.
 
 ## Working tree safety (non-ignored untracked files)
 
-When writing `<subdir>/` contents (e.g. `clone`, `pull`, `commit`), the implementation protects non-ignored untracked files:
+When updating `<subdir>/` contents (e.g. `clone`, `pull`, `commit`), `git subrepo` will abort if a checkout would overwrite a **non-ignored untracked** path under `<subdir>/`.
 
-- Non-force operations abort if a checkout would overwrite a non-ignored untracked path under `<subdir>/`.
-- Force operations allow overwriting.
+Force operations allow overwriting.
 
-Configuration:
+### Configuration
+
+Disable the untracked advisory warning:
 
 ```bash
-# Disable untracked advisory warnings
 git config subrepo.adviseUntracked false
 ```
 
 `--quiet` suppresses advisory warnings.
-
-## `.gitrepo` format and parsing
-
-- `.gitrepo` is required to identify a subrepo.
-- Parsing should be tolerant where upstream is tolerant:
-  - `subrepo.parent` may be missing (treated as empty)
-  - `subrepo.method` may be missing (defaults to `merge`)
-
-## gix-filter-branch primitives
-
-These helpers are used to emulate filter-branch-like semantics:
-
-- `subdirectory_filter(...)`: rewrite the reachable commit graph while keeping merges.
-- `tree_filter_remove_path_first_parent(...)`: remove a path on the first-parent chain (used for `.gitrepo` removal in certain flows).
-
-Keep these properties:
-
-- preserve author/committer metadata per commit
-- pruning behavior matches the intended Git semantics (`--prune-empty` expectations)
-
-## Change checklist
-
-1. Prefer test-first updates: upstream suite is the spec.
-2. Keep output strings stable (punctuation and quoting matter).
-3. Run:
-
-```bash
-cargo fmt
-cargo nextest run -p git-subrepo --features upstream-tests
-```
-
-4. Avoid documenting internal development decisions in `README.md` (project-facing only).
