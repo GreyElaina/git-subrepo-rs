@@ -92,6 +92,9 @@ fn try_main() -> Result<()> {
                 branch: opts.branch,
                 force: opts.force,
                 method: opts.method.unwrap_or(JoinMethod::Merge),
+                message: opts.message,
+                message_file: opts.file,
+                edit: opts.edit,
             })?;
             outputs.push(out);
         }
@@ -125,6 +128,7 @@ fn try_main() -> Result<()> {
                         subdir,
                         remote: opts.remote.clone(),
                         branch: opts.branch.clone(),
+                        force: opts.force,
                     })?;
                     outputs.push(out);
                 }
@@ -141,6 +145,7 @@ fn try_main() -> Result<()> {
                     subdir,
                     remote: opts.remote,
                     branch: opts.branch,
+                    force: opts.force,
                 })?;
                 outputs.push(out);
             }
@@ -158,6 +163,7 @@ fn try_main() -> Result<()> {
                 subdir,
                 all: opts.all,
                 all_all: opts.all_all,
+                fetch: opts.fetch,
             })?;
             outputs.push(out);
         }
@@ -352,6 +358,7 @@ fn try_main() -> Result<()> {
                 subdir,
                 commit_ref,
                 force: opts.force,
+                fetch: opts.fetch,
                 message: opts.message,
                 message_file: opts.file,
                 edit: opts.edit,
@@ -625,15 +632,15 @@ fn allowed_options(command: &str) -> HashSet<&'static str> {
         "clone" => HashSet::from(["branch", "edit", "force", "method", "message"]),
         "init" => HashSet::from(["branch", "method", "remote"]),
         "pull" => HashSet::from([
-            "all", "branch", "edit", "fetch", "force", "message", "remote", "squash", "update",
+            "all", "branch", "edit", "force", "message", "remote", "update",
         ]),
-        "fetch" => HashSet::from(["all", "branch", "fetch", "remote"]),
+        "fetch" => HashSet::from(["all", "branch", "force", "remote"]),
         "push" => HashSet::from([
             "all", "branch", "force", "message", "remote", "squash", "update",
         ]),
         "branch" => HashSet::from(["all", "fetch", "force"]),
         "config" => HashSet::from(["force"]),
-        "status" => HashSet::from(["all", "ALL"]),
+        "status" => HashSet::from(["all", "ALL", "fetch"]),
         "clean" => HashSet::from(["all", "ALL", "force"]),
         "commit" => HashSet::from(["edit", "fetch", "force", "message"]),
         _ => HashSet::new(),

@@ -101,3 +101,15 @@ pub fn detect_remote_head_branch(cwd: &Path, remote: &str) -> Result<String> {
 
     Err(Error::user("Problem finding remote default head branch."))
 }
+
+pub fn init_default_branch(repo: &gix::Repository) -> Result<String> {
+    use gix::bstr::ByteSlice;
+
+    let v = repo
+        .config_snapshot()
+        .string("init.defaultbranch")
+        .map(|s| s.to_str_lossy().into_owned());
+
+    Ok(v.filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "master".to_string()))
+}

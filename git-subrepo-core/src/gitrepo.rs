@@ -57,19 +57,20 @@ impl GitRepoState {
             .to_string();
         let parent = cfg
             .raw_value("subrepo.parent")
-            .map_err(|_| Error::user("Missing subrepo.parent"))?
-            .to_string();
+            .ok()
+            .map(|v| v.to_string())
+            .unwrap_or_default();
 
-        let method = cfg
-            .raw_value("subrepo.method")
-            .map_err(|_| Error::user("Missing subrepo.method"))?
-            .to_string();
-        let method: JoinMethod = method.parse()?;
+        let method = match cfg.raw_value("subrepo.method") {
+            Ok(v) => v.to_string().parse()?,
+            Err(_) => JoinMethod::Merge,
+        };
 
         let cmdver = cfg
             .raw_value("subrepo.cmdver")
-            .map_err(|_| Error::user("Missing subrepo.cmdver"))?
-            .to_string();
+            .ok()
+            .map(|v| v.to_string())
+            .unwrap_or_default();
 
         Ok(GitRepoState {
             remote,

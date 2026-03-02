@@ -22,6 +22,9 @@ pub struct CloneArgs {
     pub branch: Option<String>,
     pub force: bool,
     pub method: JoinMethod,
+    pub message: Option<String>,
+    pub message_file: Option<String>,
+    pub edit: bool,
 }
 
 pub fn clone(args: CloneArgs) -> Result<String> {
@@ -59,20 +62,30 @@ pub fn clone(args: CloneArgs) -> Result<String> {
         }
     }
 
-    let upstream_tree_id = repo
-        .find_commit(upstream_head_commit)
-        .into_subrepo_result()?
-        .tree_id()
-        .into_subrepo_result()?
-        .detach();
+    if is_reclone {
+        let _ = git_cli::run_raw(
+            &state.workdir,
+            &["rm", "-r", "--ignore-unmatch", "--", &subdir],
+        )?;
+        let _ = std::fs::remove_dir_all(state.workdir.join(&subdir));
+    }
 
-    let head_commit = repo.head_commit().into_subrepo_result()?;
-    let head_tree_id = head_commit.tree_id().into_subrepo_result()?.detach();
+    let upstream_head_str = upstream_head_commit.to_string();
+
+    git_cli::run_or_command_failed(
+        &state.workdir,
+        &[
+            "read-tree",
+            &format!("--prefix={subdir}"),
+            "-u",
+            upstream_head_str.as_str(),
+        ],
+    )?;
 
     let gitrepo_state = GitRepoState {
         remote: args.remote.clone(),
         branch: branch.clone(),
-        commit: upstream_head_commit.to_string(),
+        commit: upstream_head_str.clone(),
         parent: state
             .head_commit
             .expect("head commit is required")
@@ -80,42 +93,12 @@ pub fn clone(args: CloneArgs) -> Result<String> {
         method: args.method,
         cmdver: VERSION.to_string(),
     };
-    let gitrepo_blob = repo
-        .write_blob(gitrepo_state.format())
-        .into_subrepo_result()?
-        .detach();
 
-    let mut sub_editor = repo.edit_tree(upstream_tree_id).into_subrepo_result()?;
-    sub_editor
-        .upsert(".gitrepo", gix::object::tree::EntryKind::Blob, gitrepo_blob)
-        .into_subrepo_result()?;
-    let new_subtree_id = sub_editor.write().into_subrepo_result()?;
-
-    let mut editor = repo.edit_tree(head_tree_id).into_subrepo_result()?;
-    editor.remove(&subdir).into_subrepo_result()?;
-    editor
-        .upsert(
-            &subdir,
-            gix::object::tree::EntryKind::Tree,
-            new_subtree_id.detach(),
-        )
-        .into_subrepo_result()?;
-
-    let new_tree_id = editor.write().into_subrepo_result()?;
-
-    let commit_message = format!(
-        "git subrepo clone {remote} {subdir}\n\n",
-        remote = args.remote,
-        subdir = subdir,
-    );
-
-    repo.commit(
-        "HEAD",
-        commit_message,
-        new_tree_id.detach(),
-        [state.head_commit.expect("head commit is required")],
-    )
-    .into_subrepo_result()?;
+    let gitrepo_path = state.workdir.join(&subdir).join(".gitrepo");
+    if let Some(parent) = gitrepo_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&gitrepo_path, gitrepo_state.format())?;
 
     repo.reference(
         refs.refs_commit.as_str(),
@@ -125,7 +108,33 @@ pub fn clone(args: CloneArgs) -> Result<String> {
     )
     .into_subrepo_result()?;
 
-    git_cli::run_or_command_failed(&state.workdir, &["reset", "--hard"])?;
+    git_cli::run_or_command_failed(
+        &state.workdir,
+        &["add", "-f", "--", &format!("{subdir}/.gitrepo")],
+    )?;
+
+    let msg = match args.message {
+        Some(m) => m,
+        None => build_default_commit_message(
+            &repo,
+            "clone",
+            &[args.remote.clone(), subdir.clone()],
+            &subdir,
+            &gitrepo_state.remote,
+            &gitrepo_state.branch,
+            Some(upstream_head_commit),
+            Some(upstream_head_commit),
+        )?,
+    };
+
+    git_commit(
+        &state.workdir,
+        CommitMessageSpec {
+            message: Some(msg),
+            message_file: args.message_file,
+            edit: args.edit,
+        },
+    )?;
 
     Ok(format!(
         "Subrepo '{}' ({}) cloned into '{}'.",
@@ -148,7 +157,10 @@ pub fn init(args: InitArgs) -> Result<String> {
     assert_subdir_ready_for_init(&repo, &subdir)?;
 
     let remote = args.remote.unwrap_or_else(|| "none".to_string());
-    let branch = args.branch.unwrap_or_else(|| "master".to_string());
+    let branch = match args.branch {
+        Some(b) => b,
+        None => git_cli::init_default_branch(&repo)?,
+    };
 
     let gitrepo_state = GitRepoState {
         remote: remote.clone(),
@@ -204,6 +216,7 @@ pub struct FetchArgs {
     pub subdir: String,
     pub remote: Option<String>,
     pub branch: Option<String>,
+    pub force: bool,
 }
 
 pub fn fetch(args: FetchArgs) -> Result<String> {
@@ -239,6 +252,7 @@ pub struct StatusArgs {
     pub subdir: Option<String>,
     pub all: bool,
     pub all_all: bool,
+    pub fetch: bool,
 }
 
 pub fn status(args: StatusArgs) -> Result<String> {
@@ -260,6 +274,17 @@ pub fn status(args: StatusArgs) -> Result<String> {
     }
 
     subrepos.sort();
+
+    if args.fetch {
+        for subdir in subrepos.iter() {
+            let _ = fetch(FetchArgs {
+                subdir: subdir.clone(),
+                remote: None,
+                branch: None,
+                force: true,
+            });
+        }
+    }
 
     let mut out = String::new();
     out.push_str(&format!("{} subrepos:\n", subrepos.len()));
@@ -408,6 +433,7 @@ pub fn branch(args: BranchArgs) -> Result<String> {
             subdir: subdir.clone(),
             remote: None,
             branch: None,
+            force: true,
         });
     }
 
@@ -490,15 +516,75 @@ pub fn pull(args: PullArgs) -> Result<String> {
         }
     }
 
-    // `--force` for pull behaves like `clone` upstream.
+    // `--force` for pull behaves like `clone --force` upstream, but keeps the `pull` UX.
     if args.force {
-        return clone(CloneArgs {
-            remote: gitrepo.remote.clone(),
-            subdir: Some(subdir.clone()),
-            branch: Some(gitrepo.branch.clone()),
-            force: true,
-            method: gitrepo.method,
-        });
+        let _ = git_cli::run_raw(
+            &state.workdir,
+            &["rm", "-r", "--ignore-unmatch", "--", &subdir],
+        )?;
+        let _ = std::fs::remove_dir_all(state.workdir.join(&subdir));
+
+        let upstream_head_str = upstream_head.to_string();
+
+        git_cli::run_or_command_failed(
+            &state.workdir,
+            &[
+                "read-tree",
+                &format!("--prefix={subdir}"),
+                "-u",
+                upstream_head_str.as_str(),
+            ],
+        )?;
+
+        gitrepo.commit = upstream_head_str.clone();
+        gitrepo.parent = state
+            .head_commit
+            .expect("head commit is required")
+            .to_string();
+        gitrepo.cmdver = VERSION.to_string();
+
+        write_gitrepo_state(&state, &subdir, &gitrepo)?;
+
+        repo.reference(
+            refs.refs_commit.as_str(),
+            upstream_head,
+            gix::refs::transaction::PreviousValue::Any,
+            "",
+        )
+        .into_subrepo_result()?;
+
+        git_cli::run_or_command_failed(
+            &state.workdir,
+            &["add", "-f", "--", &format!("{subdir}/.gitrepo")],
+        )?;
+
+        let msg = match args.message {
+            Some(m) => m,
+            None => build_default_commit_message(
+                &repo,
+                "pull",
+                &[subdir.clone(), "--force".to_string()],
+                &subdir,
+                &gitrepo.remote,
+                &gitrepo.branch,
+                Some(upstream_head),
+                Some(upstream_head),
+            )?,
+        };
+
+        git_commit(
+            &state.workdir,
+            CommitMessageSpec {
+                message: Some(msg),
+                message_file: args.message_file,
+                edit: args.edit,
+            },
+        )?;
+
+        return Ok(format!(
+            "Subrepo '{subdir}' pulled from '{}' ({}).",
+            gitrepo.remote, gitrepo.branch
+        ));
     }
 
     delete_branch_and_worktree(&repo, &state, &refs.branch, "pull")?;
@@ -717,6 +803,7 @@ pub struct CommitArgs {
     pub subdir: String,
     pub commit_ref: Option<String>,
     pub force: bool,
+    pub fetch: bool,
     pub message: Option<String>,
     pub message_file: Option<String>,
     pub edit: bool,
@@ -729,6 +816,15 @@ pub fn commit(args: CommitArgs) -> Result<String> {
     let subdir = subdir::normalize_subdir(&args.subdir)?;
     let subref = subdir::encode_subdir(&subdir)?;
     let refs = SubrepoRefs::new(&subref);
+
+    if args.fetch {
+        let _ = fetch(FetchArgs {
+            subdir: subdir.clone(),
+            remote: None,
+            branch: None,
+            force: true,
+        });
+    }
 
     let mut gitrepo = read_gitrepo_state(&repo, &subdir)?;
 
@@ -1064,7 +1160,7 @@ fn create_subrepo_branch_without_parent(
 ) -> Result<()> {
     let head = state.head_commit.expect("head commit is required");
 
-    let filtered_tip = filter_branch::subdirectory_filter_first_parent(
+    let filtered_tip = filter_branch::subdirectory_filter(
         repo,
         head,
         None,
