@@ -2,6 +2,7 @@
 members = [
   "git-subrepo",
   "git-subrepo-core",
+  "git-subrepo-cli",
   "gix-filter-branch",
   "xtask",
 ]
