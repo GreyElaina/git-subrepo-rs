@@ -2,7 +2,10 @@
 
 `git-subrepo-rs` is a Rust reimplementation of the upstream Bash version of **git-subrepo** (a Git submodule alternative).
 
-The primary goal of this repository is **behavioral compatibility** with upstream `git-subrepo`, validated by running the upstream test suite against this implementation.
+This repository provides a Rust implementation of `git subrepo` (a Git submodule alternative).
+
+The core behavior is validated by running the upstream `.t` test suite against a compatibility harness in this repository.
+The user-facing CLI in this repository uses a modern argument parser and does not aim for byte-for-byte CLI output compatibility with upstream.
 
 ## Name
 
@@ -57,9 +60,10 @@ If `<subdir>/` contains non-ignored untracked files that do *not* conflict with 
 
 ## Status
 
-This project is intended to be usable as a drop-in replacement for the upstream `git-subrepo` command.
+This project is primarily validated via the upstream `.t` test suite.
 
-Compatibility is enforced by running the upstream `.t` test suite as part of this repository’s test suite.
+- A test-only compatibility harness (`git-subrepo-compat`) is built and used when running the upstream suite.
+- The user-facing `git-subrepo` binary is intended to be pleasant to use (it supports `--help`) and may differ in error formatting or incidental output from upstream.
 
 ## Requirements
 
@@ -95,7 +99,7 @@ git subrepo --version
 
 ## Commands
 
-This implementation aims to match upstream semantics and output for the commands covered by the upstream test suite.
+The underlying semantics are tested against the upstream suite, but the CLI output and help text may differ from upstream.
 
 ### `git subrepo clone <remote> [<subdir>]`
 
@@ -156,6 +160,8 @@ Run it with:
 ```bash
 cargo nextest run -p git-subrepo --features upstream-tests
 ```
+
+Note: the upstream suite runs against a test-only compatibility harness binary (`git-subrepo-compat`).
 
 ### Conformance experiments
 
