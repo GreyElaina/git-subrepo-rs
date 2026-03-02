@@ -175,7 +175,7 @@ fn install_wrapper(repo_root: &Path) -> Result<()> {
 
     let wrapper_path = bin_dir.join("git-subrepo");
 
-    let exe_path = env!("CARGO_BIN_EXE_git-subrepo");
+    let exe_path = env!("CARGO_BIN_EXE_git-subrepo-compat");
     let exe_quoted = bash_single_quote(exe_path);
 
     let content = format!(

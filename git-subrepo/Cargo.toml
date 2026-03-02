@@ -10,8 +10,14 @@ workspace = true
 
 [dependencies]
 anyhow.workspace = true
+clap = { version = "4.5.60", features = ["derive"] }
 
 git-subrepo-core = { path = "../git-subrepo-core" }
+
+[[bin]]
+name = "git-subrepo-compat"
+path = "compat/main.rs"
+required-features = ["upstream-tests"]
 
 [features]
 upstream-tests = []

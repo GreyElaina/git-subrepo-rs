@@ -410,17 +410,9 @@ name = "git-subrepo"
 version = "0.4.9"
 dependencies = [
  "anyhow",
- "git-subrepo-core",
- "tempfile",
-]
-
-[[package]]
-name = "git-subrepo-cli"
-version = "0.4.9"
-dependencies = [
- "anyhow",
  "clap",
  "git-subrepo-core",
+ "tempfile",
 ]
 
 [[package]]
