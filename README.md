@@ -28,6 +28,10 @@ git subrepo config <subdir> <option> [<value>]
 
 git subrepo status [<subdir>|--all|--ALL]
 git subrepo clean <subdir>|--all|--ALL
+
+git subrepo patches <subdir> [--since <rev>|--from-ref <ref>|--since-sync] [--style <style>] [--reverse]
+git subrepo patches <subdir> --update-ref [--ref-name <ref>]
+git subrepo patches --all|--ALL [--style <style>] [--reverse]
 ```
 
 ## Description
@@ -140,6 +144,13 @@ Remove artifacts created by `fetch` and `branch` (and commands that call them).
 ### `git subrepo config <subdir> <option> [<value>]`
 
 Read or update configuration values in `subdir/.gitrepo`.
+
+### `git subrepo patches [<subdir>|--all|--ALL]`
+
+List local mainline commits affecting a subrepo subdirectory since the last sync.
+
+- Default base: `refs/subrepo/<subref>/sync` (if present), otherwise a commit-message anchor.
+- Use `--since`, `--from-ref`, or `--update-ref` for explicit control.
 
 ## Testing
 

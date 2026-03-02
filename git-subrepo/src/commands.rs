@@ -13,7 +13,6 @@ use git_subrepo_core::{
     subdir,
 };
 
-
 use gix_filter_branch as filter_branch;
 
 pub const VERSION: &str = git_subrepo_core::VERSION;
@@ -359,10 +358,7 @@ pub fn patches(args: PatchesArgs) -> Result<String> {
         return Ok(format!("Updated ref '{ref_name}' to {head}."));
     }
 
-    if (args.since.is_some() as u8)
-        + (args.from_ref.is_some() as u8)
-        + (args.since_sync as u8)
-        > 1
+    if (args.since.is_some() as u8) + (args.from_ref.is_some() as u8) + (args.since_sync as u8) > 1
     {
         return Err(Error::user(
             "Options '--since', '--from-ref', and '--since-sync' are mutually exclusive.",
@@ -399,13 +395,7 @@ pub fn patches(args: PatchesArgs) -> Result<String> {
         let base = resolve_patches_base(&state.workdir, &repo, &subdir, &refs, &args)?;
         let range = format!("{}..HEAD", base);
 
-        let lines = git_log_subdir(
-            &state.workdir,
-            &subdir,
-            &range,
-            args.style,
-            args.reverse,
-        )?;
+        let lines = git_log_subdir(&state.workdir, &subdir, &range, args.style, args.reverse)?;
 
         out.push_str(&format!("Git subrepo '{subdir}':\n"));
         if lines.trim().is_empty() {
