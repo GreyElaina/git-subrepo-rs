@@ -714,11 +714,19 @@ pub fn pull(args: PullArgs) -> Result<String> {
         ));
     }
 
-    if let Some(remote) = args.remote {
-        gitrepo.remote = remote;
+    if (override_remote || override_branch) && !args.update {
+        return Err(Error::user(
+            "Can't override '--remote/--branch' without '--update'.",
+        ));
     }
-    if let Some(branch) = args.branch {
-        gitrepo.branch = branch;
+
+    if args.update {
+        if let Some(remote) = args.remote {
+            gitrepo.remote = remote;
+        }
+        if let Some(branch) = args.branch {
+            gitrepo.branch = branch;
+        }
     }
 
     if gitrepo.remote == "none" {
@@ -859,21 +867,29 @@ pub fn push(args: PushArgs) -> Result<String> {
         ));
     }
 
-    if let Some(remote) = args.remote {
-        gitrepo.remote = remote;
-    }
-    if let Some(branch) = args.branch {
-        gitrepo.branch = branch;
-    }
+    let push_remote = args
+        .remote
+        .clone()
+        .unwrap_or_else(|| gitrepo.remote.clone());
+    let push_branch = args
+        .branch
+        .clone()
+        .unwrap_or_else(|| gitrepo.branch.clone());
 
-    if gitrepo.remote == "none" {
+    let persist = args.update || (!override_remote && !override_branch);
+
+    if push_remote == "none" {
         return Err(Error::user(format!(
             "Can't fetch subrepo. Remote is 'none' in '{subdir}/.gitrepo'."
         )));
     }
 
-    let upstream_head =
-        remote::fetch_upstream_commit(&repo, &gitrepo.remote, &gitrepo.branch, &refs).ok();
+    // Always compare against the tracked upstream (not the push destination).
+    let upstream_head = if gitrepo.remote == "none" {
+        None
+    } else {
+        remote::fetch_upstream_commit(&repo, &gitrepo.remote, &gitrepo.branch, &refs).ok()
+    };
 
     if let (Some(upstream_head), false) = (upstream_head, args.force) {
         if !gitrepo.commit.is_empty() {
@@ -932,21 +948,35 @@ pub fn push(args: PushArgs) -> Result<String> {
     if args.force {
         push_args.push("--force".to_string());
     }
-    push_args.push(gitrepo.remote.clone());
-    push_args.push(format!("{}:{}", refs.branch, gitrepo.branch));
+    push_args.push(push_remote.clone());
+    push_args.push(format!("{}:{}", refs.branch, push_branch));
 
     let push_args_ref: Vec<&str> = push_args.iter().map(|s| s.as_str()).collect();
     git_cli::run_or_command_failed(&state.workdir, &push_args_ref)?;
 
-    repo.reference(
-        refs.refs_push.as_str(),
-        tip,
-        gix::refs::transaction::PreviousValue::Any,
-        "",
-    )
-    .into_subrepo_result()?;
+    if persist {
+        repo.reference(
+            refs.refs_push.as_str(),
+            tip,
+            gix::refs::transaction::PreviousValue::Any,
+            "",
+        )
+        .into_subrepo_result()?;
+    }
 
     delete_branch_and_worktree(&repo, &state, &refs.branch, "push")?;
+
+    if !persist {
+        return Ok(format!(
+            "Subrepo '{subdir}' pushed to '{}' ({}).",
+            push_remote, push_branch
+        ));
+    }
+
+    if args.update {
+        gitrepo.remote = push_remote.clone();
+        gitrepo.branch = push_branch.clone();
+    }
 
     gitrepo.commit = tip.to_string();
     gitrepo.parent = state
