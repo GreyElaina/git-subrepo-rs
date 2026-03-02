@@ -1461,20 +1461,12 @@ fn commit_subrepo_to_mainline(
         ensure_contains_commit(repo, upstream_head, merged_commit)?;
     }
 
-    let ls = git_cli::run_checked_stdout(&state.workdir, &["ls-files", "--", subdir])?;
-    if !ls.is_empty() {
-        let _ = git_cli::run_raw(&state.workdir, &["rm", "-r", "--", subdir])?;
-    }
-
-    git_cli::run_or_command_failed(
-        &state.workdir,
-        &[
-            "read-tree",
-            &format!("--prefix={subdir}"),
-            "-u",
-            subrepo_commit_ref,
-        ],
-    )?;
+    let merged_tree_id = repo
+        .find_commit(merged_commit)
+        .into_subrepo_result()?
+        .tree_id()
+        .into_subrepo_result()?
+        .detach();
 
     gitrepo.commit = upstream_head.to_string();
 
@@ -1489,8 +1481,15 @@ fn commit_subrepo_to_mainline(
 
     write_gitrepo_state(state, subdir, gitrepo)?;
 
-    let gitrepo_rel = format!("{subdir}/.gitrepo");
-    git_cli::run_or_command_failed(&state.workdir, &["add", "-f", "--", &gitrepo_rel])?;
+    let gitrepo_content = gitrepo.format();
+    apply_tree_into_subdir(
+        repo,
+        &state.workdir,
+        subdir,
+        merged_tree_id,
+        &gitrepo_content,
+        true,
+    )?;
 
     let message = match opts.message {
         Some(m) => m,
@@ -1696,7 +1695,7 @@ fn apply_tree_into_subdir(
     let mut opts = repo
         .checkout_options(gix_worktree::stack::state::attributes::Source::IdMapping)
         .into_subrepo_result()?;
-    opts.destination_is_initially_empty = false;
+    opts.destination_is_initially_empty = !overwrite_existing;
     opts.overwrite_existing = overwrite_existing;
 
     let should_interrupt = AtomicBool::new(false);
@@ -1746,6 +1745,72 @@ fn apply_tree_into_subdir(
     std::sync::atomic::fence(Ordering::SeqCst);
 
     Ok(())
+}
+
+#[cfg(test)]
+mod apply_tree_tests {
+    use super::*;
+
+    use std::path::Path;
+
+    fn run_checked(cwd: &Path, args: &[&str]) {
+        let out = std::process::Command::new("git")
+            .args(args)
+            .current_dir(cwd)
+            .output()
+            .expect("git must run");
+        if !out.status.success() {
+            panic!(
+                "git failed: git {}\nstdout:\n{}\nstderr:\n{}",
+                args.join(" "),
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+    }
+
+    #[test]
+    fn tracked_only_force_delete_preserves_untracked() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let repo_dir = tmp.path().join("repo");
+        std::fs::create_dir_all(&repo_dir).expect("mkdir");
+
+        run_checked(&repo_dir, &["init", "-q"]);
+        run_checked(&repo_dir, &["config", "user.name", "Test"]);
+        run_checked(&repo_dir, &["config", "user.email", "test@test"]);
+
+        std::fs::create_dir_all(repo_dir.join("sub")).expect("mkdir sub");
+        std::fs::write(repo_dir.join("sub/tracked"), b"tracked\n").expect("write tracked");
+        std::fs::write(repo_dir.join("sub/untracked"), b"untracked\n").expect("write untracked");
+
+        run_checked(&repo_dir, &["add", "sub/tracked"]);
+        run_checked(&repo_dir, &["commit", "-q", "-m", "init"]);
+
+        let repo = gix::open(&repo_dir).expect("open repo");
+        let empty_tree = repo.empty_tree().id;
+
+        apply_tree_into_subdir(
+            &repo,
+            &repo_dir,
+            "sub",
+            empty_tree,
+            GitRepoState {
+                remote: "none".to_string(),
+                branch: "master".to_string(),
+                commit: "".to_string(),
+                parent: "".to_string(),
+                method: JoinMethod::Merge,
+                cmdver: VERSION.to_string(),
+            }
+            .format()
+            .as_str(),
+            true,
+        )
+        .expect("apply");
+
+        assert!(!repo_dir.join("sub/tracked").exists());
+        assert!(repo_dir.join("sub/untracked").exists());
+    }
 }
 
 fn build_default_commit_message(
