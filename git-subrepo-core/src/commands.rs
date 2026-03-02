@@ -62,25 +62,14 @@ pub fn clone(args: CloneArgs) -> Result<String> {
         }
     }
 
-    if is_reclone {
-        let _ = git_cli::run_raw(
-            &state.workdir,
-            &["rm", "-r", "--ignore-unmatch", "--", &subdir],
-        )?;
-        let _ = std::fs::remove_dir_all(state.workdir.join(&subdir));
-    }
+    let upstream_tree_id = repo
+        .find_commit(upstream_head_commit)
+        .into_subrepo_result()?
+        .tree_id()
+        .into_subrepo_result()?
+        .detach();
 
     let upstream_head_str = upstream_head_commit.to_string();
-
-    git_cli::run_or_command_failed(
-        &state.workdir,
-        &[
-            "read-tree",
-            &format!("--prefix={subdir}"),
-            "-u",
-            upstream_head_str.as_str(),
-        ],
-    )?;
 
     let gitrepo_state = GitRepoState {
         remote: args.remote.clone(),
@@ -94,11 +83,16 @@ pub fn clone(args: CloneArgs) -> Result<String> {
         cmdver: VERSION.to_string(),
     };
 
-    let gitrepo_path = state.workdir.join(&subdir).join(".gitrepo");
-    if let Some(parent) = gitrepo_path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    std::fs::write(&gitrepo_path, gitrepo_state.format())?;
+    let gitrepo_content = gitrepo_state.format();
+
+    apply_tree_into_subdir(
+        &repo,
+        &state.workdir,
+        &subdir,
+        upstream_tree_id,
+        &gitrepo_content,
+        args.force,
+    )?;
 
     repo.reference(
         refs.refs_commit.as_str(),
@@ -107,11 +101,6 @@ pub fn clone(args: CloneArgs) -> Result<String> {
         "",
     )
     .into_subrepo_result()?;
-
-    git_cli::run_or_command_failed(
-        &state.workdir,
-        &["add", "-f", "--", &format!("{subdir}/.gitrepo")],
-    )?;
 
     let msg = match args.message {
         Some(m) => m,
@@ -518,23 +507,14 @@ pub fn pull(args: PullArgs) -> Result<String> {
 
     // `--force` for pull behaves like `clone --force` upstream, but keeps the `pull` UX.
     if args.force {
-        let _ = git_cli::run_raw(
-            &state.workdir,
-            &["rm", "-r", "--ignore-unmatch", "--", &subdir],
-        )?;
-        let _ = std::fs::remove_dir_all(state.workdir.join(&subdir));
+        let upstream_tree_id = repo
+            .find_commit(upstream_head)
+            .into_subrepo_result()?
+            .tree_id()
+            .into_subrepo_result()?
+            .detach();
 
         let upstream_head_str = upstream_head.to_string();
-
-        git_cli::run_or_command_failed(
-            &state.workdir,
-            &[
-                "read-tree",
-                &format!("--prefix={subdir}"),
-                "-u",
-                upstream_head_str.as_str(),
-            ],
-        )?;
 
         gitrepo.commit = upstream_head_str.clone();
         gitrepo.parent = state
@@ -543,7 +523,16 @@ pub fn pull(args: PullArgs) -> Result<String> {
             .to_string();
         gitrepo.cmdver = VERSION.to_string();
 
-        write_gitrepo_state(&state, &subdir, &gitrepo)?;
+        let gitrepo_content = gitrepo.format();
+
+        apply_tree_into_subdir(
+            &repo,
+            &state.workdir,
+            &subdir,
+            upstream_tree_id,
+            &gitrepo_content,
+            true,
+        )?;
 
         repo.reference(
             refs.refs_commit.as_str(),
@@ -552,11 +541,6 @@ pub fn pull(args: PullArgs) -> Result<String> {
             "",
         )
         .into_subrepo_result()?;
-
-        git_cli::run_or_command_failed(
-            &state.workdir,
-            &["add", "-f", "--", &format!("{subdir}/.gitrepo")],
-        )?;
 
         let msg = match args.message {
             Some(m) => m,
@@ -1564,6 +1548,202 @@ fn git_commit(repo_root: &Path, spec: CommitMessageSpec) -> Result<()> {
     } else {
         git_cli::run_or_command_failed(repo_root, &["commit", "-m", &msg])?;
     }
+
+    Ok(())
+}
+
+fn apply_tree_into_subdir(
+    repo: &gix::Repository,
+    workdir: &Path,
+    subdir: &str,
+    tree_id: gix::ObjectId,
+    gitrepo_content: &str,
+    overwrite_existing: bool,
+) -> Result<()> {
+    use std::collections::HashSet;
+    use std::ffi::OsStr;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    use gix::bstr::ByteSlice;
+
+    #[cfg(unix)]
+    use std::os::unix::ffi::OsStrExt;
+
+    struct EntrySpec {
+        path: Vec<u8>,
+        id: gix::ObjectId,
+        flags: gix_index::entry::Flags,
+        mode: gix_index::entry::Mode,
+    }
+
+    let prefix = format!("{subdir}/");
+    let prefix_bstr = prefix.as_bytes().as_bstr();
+
+    let mut index = repo
+        .index_or_load_from_head_or_empty()
+        .into_subrepo_result()?
+        .into_owned();
+
+    let mut old_paths: HashSet<Vec<u8>> = HashSet::new();
+    for e in index.entries() {
+        let p = e.path(&index);
+        if p.starts_with(prefix_bstr) {
+            old_paths.insert(p.to_vec());
+        }
+    }
+
+    let tree_index = repo
+        .index_from_tree(tree_id.as_ref())
+        .into_subrepo_result()?;
+
+    let mut specs: Vec<EntrySpec> = Vec::with_capacity(tree_index.entries().len() + 1);
+    for e in tree_index.entries() {
+        let p = e.path(&tree_index);
+        let mut out = Vec::with_capacity(prefix.len() + p.len());
+        out.extend_from_slice(prefix.as_bytes());
+        out.extend_from_slice(p);
+        specs.push(EntrySpec {
+            path: out,
+            id: e.id,
+            flags: e.flags,
+            mode: e.mode,
+        });
+    }
+
+    let blob_id = repo
+        .write_blob(gitrepo_content)
+        .into_subrepo_result()?
+        .detach();
+
+    {
+        let mut out = Vec::with_capacity(prefix.len() + ".gitrepo".len());
+        out.extend_from_slice(prefix.as_bytes());
+        out.extend_from_slice(b".gitrepo");
+        specs.push(EntrySpec {
+            path: out,
+            id: blob_id,
+            flags: gix_index::entry::Flags::empty(),
+            mode: gix_index::entry::Mode::FILE,
+        });
+    }
+
+    let new_paths: HashSet<Vec<u8>> = specs.iter().map(|s| s.path.clone()).collect();
+
+    let mut to_delete: Vec<Vec<u8>> = old_paths.difference(&new_paths).cloned().collect();
+    // Delete deeper paths first so directory cleanup is safe.
+    to_delete.sort_by_key(|p| std::cmp::Reverse(p.len()));
+
+    for path in &to_delete {
+        #[cfg(unix)]
+        let os_path = OsStr::from_bytes(path);
+
+        #[cfg(not(unix))]
+        let os_path =
+            OsStr::new(std::str::from_utf8(path).map_err(|_| {
+                Error::user("Invalid path encoding while removing old tracked files")
+            })?);
+
+        let full = workdir.join(os_path);
+        let meta = std::fs::symlink_metadata(&full);
+        match meta {
+            Ok(meta) if meta.is_dir() => {
+                let _ = std::fs::remove_dir_all(&full);
+            }
+            Ok(_) => {
+                let _ = std::fs::remove_file(&full);
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => return Err(err.into()),
+        }
+
+        // Remove empty parent directories up to `subdir/`.
+        if let Ok(rel) = full.strip_prefix(workdir.join(subdir)) {
+            let mut cur = rel.parent();
+            while let Some(dir) = cur {
+                let abs = workdir.join(subdir).join(dir);
+                if abs.as_os_str().is_empty() {
+                    break;
+                }
+                if abs
+                    .read_dir()
+                    .map(|mut it| it.next().is_none())
+                    .unwrap_or(false)
+                {
+                    let _ = std::fs::remove_dir(&abs);
+                    cur = dir.parent();
+                    continue;
+                }
+                break;
+            }
+        }
+    }
+
+    // Checkout the new state using a temporary index containing only `subdir/` paths.
+    let mut temp_state = gix_index::State::new(repo.object_hash());
+    for e in &specs {
+        temp_state.dangerously_push_entry(
+            gix_index::entry::Stat::default(),
+            e.id,
+            e.flags,
+            e.mode,
+            e.path.as_bstr(),
+        );
+    }
+    temp_state.sort_entries();
+
+    let mut temp_index = gix_index::File::from_state(temp_state, repo.index_path());
+
+    let mut opts = repo
+        .checkout_options(gix_worktree::stack::state::attributes::Source::IdMapping)
+        .into_subrepo_result()?;
+    opts.destination_is_initially_empty = false;
+    opts.overwrite_existing = overwrite_existing;
+
+    let should_interrupt = AtomicBool::new(false);
+    let odb = repo.objects.clone().into_arc().into_subrepo_result()?;
+    let _outcome = gix_worktree_state::checkout(
+        &mut temp_index,
+        workdir,
+        odb,
+        &gix::progress::Discard,
+        &gix::progress::Discard,
+        &should_interrupt,
+        opts,
+    )
+    .into_subrepo_result()?;
+
+    // Ensure the `.gitrepo` file content is present on disk (checkout writes it, but be explicit).
+    std::fs::create_dir_all(workdir.join(subdir))?;
+    std::fs::write(
+        workdir.join(subdir).join(".gitrepo"),
+        gitrepo_content.as_bytes(),
+    )?;
+
+    // Update main index: replace all entries under `subdir/`.
+    index.remove_entries(|_, p, _| p.starts_with(prefix_bstr));
+
+    for e in specs {
+        #[cfg(unix)]
+        let os_path = OsStr::from_bytes(&e.path);
+
+        #[cfg(not(unix))]
+        let os_path = OsStr::new(
+            std::str::from_utf8(&e.path)
+                .map_err(|_| Error::user("Invalid path encoding while updating index"))?,
+        );
+
+        let full = workdir.join(os_path);
+        let meta = gix_index::fs::Metadata::from_path_no_follow(&full)?;
+        let stat = gix_index::entry::Stat::from_fs(&meta).map_err(Error::internal)?;
+
+        index.dangerously_push_entry(stat, e.id, e.flags, e.mode, e.path.as_bstr());
+    }
+
+    index.sort_entries();
+    index.write(Default::default()).into_subrepo_result()?;
+
+    // Avoid reordering of operations by the compiler across file-system boundaries.
+    std::sync::atomic::fence(Ordering::SeqCst);
 
     Ok(())
 }

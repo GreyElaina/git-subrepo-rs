@@ -10,19 +10,14 @@ workspace = true
 
 [dependencies]
 thiserror.workspace = true
-
-gix = { workspace = true, features = [
-  "blocking-network-client",
-  "blocking-http-transport-curl",
-  "merge",
-  "revision",
-  "tree-editor",
-  "worktree-mutation",
-] }
+gix = { workspace = true, features = ["blocking-network-client", "blocking-http-transport-curl", "merge", "revision", "tree-editor", "worktree-mutation", "index", "attributes"] }
 
 gix-config.workspace = true
 
 gix-filter-branch = { path = "../gix-filter-branch" }
+gix-index = "0.48.0"
+gix-worktree-state = "0.27.0"
+gix-worktree = "0.49.0"
 
 [features]
 poc-tests = []
