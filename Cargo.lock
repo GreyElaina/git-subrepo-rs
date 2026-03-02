@@ -2309,6 +2309,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "xtask"
+version = "0.4.9"
+dependencies = [
+ "anyhow",
+]
+
+[[package]]
 name = "zlib-rs"
 version = "0.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -3,6 +3,7 @@ members = [
   "git-subrepo",
   "git-subrepo-core",
   "gix-filter-branch",
+  "xtask",
 ]
 resolver = "2"
 
