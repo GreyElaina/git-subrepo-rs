@@ -1,10 +1,10 @@
 ---
 name: git-subrepo
 description: >
-  Provides step-by-step usage guidance for the git-subrepo CLI tool.
+  Provides step-by-step usage guidance for the git-subrepo CLI tool (git subrepo command).
   Use when the user wants to clone, pull, push, fetch, branch, commit,
   init, clean, or configure a subrepo; or when diagnosing subrepo errors
-  or conflicts in this repository.
+  or conflicts.
 ---
 
 # git-subrepo
@@ -165,6 +165,8 @@ This means **mainline rebases that touch `<subdir>/` will invalidate the
 `parent` field** — see [Known pitfalls](#known-pitfalls).
 
 ## Command reference
+
+Note: this repository’s user-facing CLI supports `--help` and may differ from upstream in error formatting or incidental output.
 
 ### `git subrepo clone <remote> [<subdir>]`
 
