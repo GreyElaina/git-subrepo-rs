@@ -465,6 +465,13 @@ fn resolve_patches_base(
         {
             return Ok(r.peel_to_commit().into_subrepo_result()?.id);
         }
+
+        if let Some(mut r) = repo
+            .try_find_reference(refs.refs_baseline.as_str())
+            .into_subrepo_result()?
+        {
+            return Ok(r.peel_to_commit().into_subrepo_result()?.id);
+        }
     }
 
     if let Some(base) = find_last_sync_anchor_commit(repo_root, subdir)? {
@@ -473,7 +480,8 @@ fn resolve_patches_base(
 
     Err(Error::user(format!(
         "Cannot determine sync base for '{subdir}'.\n\
-Run 'git subrepo patches {subdir} --since <rev>' or 'git subrepo patches {subdir} --update-ref'."
+Run 'git subrepo patches {subdir} --since <rev>' or\n\
+  'git subrepo patches {subdir} --update-ref' (creates refs/subrepo/<subref>/baseline)."
     )))
 }
 

@@ -251,6 +251,7 @@ Base selection order:
 - `--since <rev>`
 - `--from-ref <ref>`
 - `refs/subrepo/<subref>/sync` if present
+- `refs/subrepo/<subref>/baseline` if present
 - fallback to commit-message anchor
 
 Common options:
