@@ -36,6 +36,25 @@ git subrepo clean <subdir>|--all|--ALL
 
 A subrepo is identified by the presence of a `subdir/.gitrepo` file.
 
+## Working tree safety
+
+When updating a subrepo, this implementation protects **non-ignored untracked files** inside the subrepo directory:
+
+- For non-force operations (`clone`, `pull`, `commit`), if a checkout would overwrite a non-ignored untracked file under `<subdir>/`, the command will abort (similar to Git’s checkout/merge safety checks).
+- For force operations (`--force`), overwriting is allowed.
+
+If `<subdir>/` contains non-ignored untracked files that do *not* conflict with the checkout, the command may emit an advisory warning.
+
+### Configuration
+
+- Disable the untracked advisory warning:
+
+  ```bash
+  git config subrepo.adviseUntracked false
+  ```
+
+- `--quiet` suppresses advisory warnings.
+
 ## Status
 
 This project is intended to be usable as a drop-in replacement for the upstream `git-subrepo` command.
