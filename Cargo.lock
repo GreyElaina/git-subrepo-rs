@@ -412,6 +412,11 @@ dependencies = [
  "anyhow",
  "clap",
  "git-subrepo-core",
+ "gix",
+ "gix-filter-branch",
+ "gix-index",
+ "gix-worktree",
+ "gix-worktree-state",
  "tempfile",
 ]
 

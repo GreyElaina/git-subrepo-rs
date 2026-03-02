@@ -1,9 +1,9 @@
 use anyhow::Result;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 
-use git_subrepo_core::{
+use git_subrepo::{
     BranchArgs, CleanArgs, CloneArgs, CommitArgs, ConfigArgs, FetchArgs, InitArgs, JoinMethod,
-    PullArgs, PushArgs, StatusArgs,
+    PatchesArgs, PatchesStyle, PullArgs, PushArgs, StatusArgs,
 };
 
 #[derive(Debug, Parser)]
@@ -26,6 +26,7 @@ enum Command {
     Status(StatusCmd),
     Clean(CleanCmd),
     Config(ConfigCmd),
+    Patches(PatchesCmd),
     Version(VersionCmd),
 }
 
@@ -40,6 +41,25 @@ impl From<JoinMethodValue> for JoinMethod {
         match value {
             JoinMethodValue::Merge => JoinMethod::Merge,
             JoinMethodValue::Rebase => JoinMethod::Rebase,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum PatchesStyleValue {
+    Oneline,
+    Decorate,
+    Stat,
+    NameStatus,
+}
+
+impl From<PatchesStyleValue> for PatchesStyle {
+    fn from(value: PatchesStyleValue) -> Self {
+        match value {
+            PatchesStyleValue::Oneline => PatchesStyle::Oneline,
+            PatchesStyleValue::Decorate => PatchesStyle::Decorate,
+            PatchesStyleValue::Stat => PatchesStyle::Stat,
+            PatchesStyleValue::NameStatus => PatchesStyle::NameStatus,
         }
     }
 }
@@ -212,6 +232,47 @@ struct ConfigCmd {
 }
 
 #[derive(Debug, Args)]
+struct PatchesCmd {
+    #[arg(value_name = "SUBDIR")]
+    subdir: Option<String>,
+
+    #[arg(long = "all")]
+    all: bool,
+
+    #[arg(long = "ALL")]
+    all_all: bool,
+
+    #[arg(
+        long = "since",
+        value_name = "REV",
+        conflicts_with_all = ["from_ref", "since_sync"],
+    )]
+    since: Option<String>,
+
+    #[arg(
+        long = "from-ref",
+        value_name = "REF",
+        conflicts_with_all = ["since", "since_sync"],
+    )]
+    from_ref: Option<String>,
+
+    #[arg(long = "since-sync", conflicts_with_all = ["since", "from_ref"])]
+    since_sync: bool,
+
+    #[arg(long = "update-ref")]
+    update_ref: bool,
+
+    #[arg(long = "ref-name", value_name = "REF")]
+    ref_name: Option<String>,
+
+    #[arg(long = "style", value_enum, default_value = "oneline")]
+    style: PatchesStyleValue,
+
+    #[arg(long = "reverse")]
+    reverse: bool,
+}
+
+#[derive(Debug, Args)]
 struct VersionCmd {
     #[arg(short = 'q', long = "quiet")]
     quiet: bool,
@@ -229,7 +290,7 @@ fn try_main() -> Result<()> {
 
     match cli.command {
         Command::Clone(cmd) => {
-            let out = git_subrepo_core::clone(CloneArgs {
+            let out = git_subrepo::clone(CloneArgs {
                 remote: cmd.remote_url,
                 subdir: cmd.subdir,
                 branch: cmd.branch,
@@ -242,7 +303,7 @@ fn try_main() -> Result<()> {
             print_out(out);
         }
         Command::Init(cmd) => {
-            let out = git_subrepo_core::init(InitArgs {
+            let out = git_subrepo::init(InitArgs {
                 subdir: cmd.subdir,
                 remote: cmd.remote,
                 branch: cmd.branch,
@@ -251,7 +312,7 @@ fn try_main() -> Result<()> {
             print_out(out);
         }
         Command::Fetch(cmd) => {
-            let out = git_subrepo_core::fetch(FetchArgs {
+            let out = git_subrepo::fetch(FetchArgs {
                 subdir: cmd.subdir,
                 remote: cmd.remote,
                 branch: cmd.branch,
@@ -260,7 +321,7 @@ fn try_main() -> Result<()> {
             print_out(out);
         }
         Command::Branch(cmd) => {
-            let out = git_subrepo_core::branch(BranchArgs {
+            let out = git_subrepo::branch(BranchArgs {
                 subdir: cmd.subdir,
                 force: cmd.force,
                 fetch: cmd.fetch,
@@ -268,7 +329,7 @@ fn try_main() -> Result<()> {
             print_out(out);
         }
         Command::Pull(cmd) => {
-            let out = git_subrepo_core::pull(PullArgs {
+            let out = git_subrepo::pull(PullArgs {
                 subdir: cmd.subdir,
                 force: cmd.force,
                 remote: cmd.remote,
@@ -281,7 +342,7 @@ fn try_main() -> Result<()> {
             print_out(out);
         }
         Command::Push(cmd) => {
-            let out = git_subrepo_core::push(PushArgs {
+            let out = git_subrepo::push(PushArgs {
                 subdir: cmd.subdir,
                 force: cmd.force,
                 squash: cmd.squash,
@@ -294,7 +355,7 @@ fn try_main() -> Result<()> {
             print_out(out);
         }
         Command::Commit(cmd) => {
-            let out = git_subrepo_core::commit(CommitArgs {
+            let out = git_subrepo::commit(CommitArgs {
                 subdir: cmd.subdir,
                 commit_ref: cmd.subrepo_ref,
                 force: cmd.force,
@@ -308,11 +369,11 @@ fn try_main() -> Result<()> {
         Command::Status(cmd) => {
             if cmd.quiet {
                 let include_nested = cmd.all_all;
-                for s in git_subrepo_core::subrepos(include_nested)? {
+                for s in git_subrepo::subrepos(include_nested)? {
                     println!("{s}");
                 }
             } else {
-                let out = git_subrepo_core::status(StatusArgs {
+                let out = git_subrepo::status(StatusArgs {
                     subdir: cmd.subdir,
                     all: cmd.all,
                     all_all: cmd.all_all,
@@ -322,7 +383,7 @@ fn try_main() -> Result<()> {
             }
         }
         Command::Clean(cmd) => {
-            let removed = git_subrepo_core::clean(CleanArgs {
+            let removed = git_subrepo::clean(CleanArgs {
                 subdir: cmd.subdir,
                 force: cmd.force,
             })?;
@@ -331,7 +392,7 @@ fn try_main() -> Result<()> {
             }
         }
         Command::Config(cmd) => {
-            let out = git_subrepo_core::config(ConfigArgs {
+            let out = git_subrepo::config(ConfigArgs {
                 subdir: cmd.subdir,
                 option: cmd.option,
                 value: cmd.value,
@@ -339,9 +400,24 @@ fn try_main() -> Result<()> {
             })?;
             print_out(out);
         }
+        Command::Patches(cmd) => {
+            let out = git_subrepo::patches(PatchesArgs {
+                subdir: cmd.subdir,
+                all: cmd.all,
+                all_all: cmd.all_all,
+                since: cmd.since,
+                from_ref: cmd.from_ref,
+                since_sync: cmd.since_sync,
+                update_ref: cmd.update_ref,
+                ref_name: cmd.ref_name,
+                style: cmd.style.into(),
+                reverse: cmd.reverse,
+            })?;
+            print_out(out);
+        }
         Command::Version(cmd) => {
             if !cmd.quiet {
-                println!("{}", git_subrepo_core::VERSION);
+                println!("{}", git_subrepo::VERSION);
             }
         }
     }

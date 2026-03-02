@@ -1,12 +1,15 @@
-mod commands;
-mod error;
-mod git_cli;
-mod gitrepo;
-mod refs;
-mod remote;
-mod repo;
-mod subdir;
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-pub use commands::*;
+pub mod error;
+pub mod git_cli;
+pub mod gitrepo;
+pub mod refs;
+pub mod remote;
+pub mod repo;
+pub mod subdir;
+
+pub mod plumbing;
+
 pub use error::{Error, Result, SubrepoResultExt};
 pub use gitrepo::{GitRepoState, JoinMethod};
+pub use refs::SubrepoRefs;

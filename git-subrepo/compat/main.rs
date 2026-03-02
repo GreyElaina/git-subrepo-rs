@@ -2,7 +2,7 @@ use std::{collections::HashSet, iter::Peekable, process};
 
 use anyhow::{anyhow, Result};
 
-use git_subrepo_core::{
+use git_subrepo::{
     BranchArgs, CleanArgs, CloneArgs, CommitArgs, ConfigArgs, FetchArgs, InitArgs, JoinMethod,
     PullArgs, PushArgs, StatusArgs,
 };
@@ -39,7 +39,7 @@ fn try_main() -> Result<()> {
     let argv: Vec<String> = std::env::args().skip(1).collect();
 
     if argv.len() == 1 && argv[0] == "--version" {
-        println!("{}", git_subrepo_core::VERSION);
+        println!("{}", git_subrepo::VERSION);
         return Ok(());
     }
 
@@ -51,7 +51,7 @@ fn try_main() -> Result<()> {
 
     if command == "version" {
         if !opts.quiet {
-            println!("{}", git_subrepo_core::VERSION);
+            println!("{}", git_subrepo::VERSION);
         }
         return Ok(());
     }
@@ -91,7 +91,7 @@ fn try_main() -> Result<()> {
                 ));
             }
 
-            let out = git_subrepo_core::clone(CloneArgs {
+            let out = git_subrepo::clone(CloneArgs {
                 remote,
                 subdir,
                 branch: opts.branch,
@@ -112,7 +112,7 @@ fn try_main() -> Result<()> {
                 ));
             }
 
-            let out = git_subrepo_core::init(InitArgs {
+            let out = git_subrepo::init(InitArgs {
                 subdir,
                 remote: opts.remote,
                 branch: opts.branch,
@@ -128,8 +128,8 @@ fn try_main() -> Result<()> {
                         positionals.join(" ")
                     ));
                 }
-                for subdir in git_subrepo_core::subrepos(include_nested)? {
-                    let out = git_subrepo_core::fetch(FetchArgs {
+                for subdir in git_subrepo::subrepos(include_nested)? {
+                    let out = git_subrepo::fetch(FetchArgs {
                         subdir,
                         remote: opts.remote.clone(),
                         branch: opts.branch.clone(),
@@ -146,7 +146,7 @@ fn try_main() -> Result<()> {
                     ));
                 }
 
-                let out = git_subrepo_core::fetch(FetchArgs {
+                let out = git_subrepo::fetch(FetchArgs {
                     subdir,
                     remote: opts.remote,
                     branch: opts.branch,
@@ -164,7 +164,7 @@ fn try_main() -> Result<()> {
                     extra
                 ));
             }
-            let out = git_subrepo_core::status(StatusArgs {
+            let out = git_subrepo::status(StatusArgs {
                 subdir,
                 all: opts.all,
                 all_all: opts.all_all,
@@ -180,8 +180,8 @@ fn try_main() -> Result<()> {
                         positionals.join(" ")
                     ));
                 }
-                for subdir in git_subrepo_core::subrepos(include_nested)? {
-                    let removed = git_subrepo_core::clean(CleanArgs {
+                for subdir in git_subrepo::subrepos(include_nested)? {
+                    let removed = git_subrepo::clean(CleanArgs {
                         subdir,
                         force: opts.force,
                     })?;
@@ -196,7 +196,7 @@ fn try_main() -> Result<()> {
                     ));
                 }
 
-                let removed = git_subrepo_core::clean(CleanArgs {
+                let removed = git_subrepo::clean(CleanArgs {
                     subdir,
                     force: opts.force,
                 })?;
@@ -218,7 +218,7 @@ fn try_main() -> Result<()> {
                 ));
             }
 
-            let out = git_subrepo_core::config(ConfigArgs {
+            let out = git_subrepo::config(ConfigArgs {
                 subdir,
                 option,
                 value,
@@ -234,8 +234,8 @@ fn try_main() -> Result<()> {
                         positionals.join(" ")
                     ));
                 }
-                for subdir in git_subrepo_core::subrepos(include_nested)? {
-                    let out = git_subrepo_core::branch(BranchArgs {
+                for subdir in git_subrepo::subrepos(include_nested)? {
+                    let out = git_subrepo::branch(BranchArgs {
                         subdir,
                         force: opts.force,
                         fetch: opts.fetch,
@@ -251,7 +251,7 @@ fn try_main() -> Result<()> {
                     ));
                 }
 
-                let out = git_subrepo_core::branch(BranchArgs {
+                let out = git_subrepo::branch(BranchArgs {
                     subdir,
                     force: opts.force,
                     fetch: opts.fetch,
@@ -267,8 +267,8 @@ fn try_main() -> Result<()> {
                         positionals.join(" ")
                     ));
                 }
-                for subdir in git_subrepo_core::subrepos(include_nested)? {
-                    let out = git_subrepo_core::pull(PullArgs {
+                for subdir in git_subrepo::subrepos(include_nested)? {
+                    let out = git_subrepo::pull(PullArgs {
                         subdir,
                         force: opts.force,
                         remote: opts.remote.clone(),
@@ -289,7 +289,7 @@ fn try_main() -> Result<()> {
                     ));
                 }
 
-                let out = git_subrepo_core::pull(PullArgs {
+                let out = git_subrepo::pull(PullArgs {
                     subdir,
                     force: opts.force,
                     remote: opts.remote,
@@ -310,8 +310,8 @@ fn try_main() -> Result<()> {
                         positionals.join(" ")
                     ));
                 }
-                for subdir in git_subrepo_core::subrepos(include_nested)? {
-                    let out = git_subrepo_core::push(PushArgs {
+                for subdir in git_subrepo::subrepos(include_nested)? {
+                    let out = git_subrepo::push(PushArgs {
                         subdir,
                         force: opts.force,
                         squash: opts.squash,
@@ -332,7 +332,7 @@ fn try_main() -> Result<()> {
                     ));
                 }
 
-                let out = git_subrepo_core::push(PushArgs {
+                let out = git_subrepo::push(PushArgs {
                     subdir,
                     force: opts.force,
                     squash: opts.squash,
@@ -359,7 +359,7 @@ fn try_main() -> Result<()> {
                 ));
             }
 
-            let out = git_subrepo_core::commit(CommitArgs {
+            let out = git_subrepo::commit(CommitArgs {
                 subdir,
                 commit_ref,
                 force: opts.force,

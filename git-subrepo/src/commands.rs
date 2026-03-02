@@ -2,8 +2,9 @@ use std::path::{Path, PathBuf};
 
 use gix::bstr::ByteSlice;
 
-use crate::{
-    error::{Error, Result, SubrepoResultExt},
+use git_subrepo_core::{Error, Result, SubrepoResultExt};
+
+use git_subrepo_core::{
     git_cli,
     gitrepo::{GitRepoState, JoinMethod},
     refs::SubrepoRefs,
@@ -12,9 +13,10 @@ use crate::{
     subdir,
 };
 
+
 use gix_filter_branch as filter_branch;
 
-pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+pub const VERSION: &str = git_subrepo_core::VERSION;
 
 pub struct CloneArgs {
     pub remote: String,
@@ -28,7 +30,7 @@ pub struct CloneArgs {
 }
 
 pub fn clone(args: CloneArgs) -> Result<String> {
-    let repo = crate::repo::discover_repo()?;
+    let repo = git_subrepo_core::repo::discover_repo()?;
     let state = ensure_repo_is_ready(&repo, "clone", false, true)?;
     ensure_has_head_commit(&repo)?;
 
@@ -117,8 +119,10 @@ pub fn clone(args: CloneArgs) -> Result<String> {
         )?,
     };
 
-    git_commit(
+    git_commit_then_update_sync_ref(
         &state.workdir,
+        &repo,
+        &refs,
         CommitMessageSpec {
             message: Some(msg),
             message_file: args.message_file,
@@ -140,7 +144,7 @@ pub struct InitArgs {
 }
 
 pub fn init(args: InitArgs) -> Result<String> {
-    let repo = crate::repo::discover_repo()?;
+    let repo = git_subrepo_core::repo::discover_repo()?;
     let state = ensure_repo_is_ready(&repo, "init", true, true)?;
 
     let subdir = subdir::normalize_subdir(&args.subdir)?;
@@ -210,7 +214,7 @@ pub struct FetchArgs {
 }
 
 pub fn fetch(args: FetchArgs) -> Result<String> {
-    let repo = crate::repo::discover_repo()?;
+    let repo = git_subrepo_core::repo::discover_repo()?;
     ensure_repo_is_ready(&repo, "fetch", true, false)?;
 
     let subdir = subdir::normalize_subdir(&args.subdir)?;
@@ -246,7 +250,7 @@ pub struct StatusArgs {
 }
 
 pub fn status(args: StatusArgs) -> Result<String> {
-    let repo = crate::repo::discover_repo()?;
+    let repo = git_subrepo_core::repo::discover_repo()?;
     ensure_repo_is_ready(&repo, "status", true, false)?;
 
     let mut subrepos = list_subrepos_from_head(&repo)?;
@@ -286,7 +290,7 @@ pub fn status(args: StatusArgs) -> Result<String> {
 }
 
 pub fn subrepos(include_nested: bool) -> Result<Vec<String>> {
-    let repo = crate::repo::discover_repo()?;
+    let repo = git_subrepo_core::repo::discover_repo()?;
     ensure_repo_is_ready(&repo, "status", true, false)?;
 
     let mut subrepos = list_subrepos_from_head(&repo)?;
@@ -297,13 +301,280 @@ pub fn subrepos(include_nested: bool) -> Result<Vec<String>> {
     Ok(subrepos)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PatchesStyle {
+    Oneline,
+    Decorate,
+    Stat,
+    NameStatus,
+}
+
+pub struct PatchesArgs {
+    pub subdir: Option<String>,
+
+    pub all: bool,
+    pub all_all: bool,
+
+    pub since: Option<String>,
+    pub from_ref: Option<String>,
+    pub since_sync: bool,
+
+    pub update_ref: bool,
+    pub ref_name: Option<String>,
+
+    pub style: PatchesStyle,
+    pub reverse: bool,
+}
+
+pub fn patches(args: PatchesArgs) -> Result<String> {
+    let repo = git_subrepo_core::repo::discover_repo()?;
+    let state = ensure_repo_is_ready(&repo, "patches", true, false)?;
+
+    if args.update_ref {
+        let Some(subdir) = args.subdir.as_deref() else {
+            return Err(Error::user(
+                "Command 'patches' requires a subdir when using '--update-ref'.",
+            ));
+        };
+        if args.all || args.all_all {
+            return Err(Error::user(
+                "Command 'patches' does not support '--all/--ALL' with '--update-ref'.",
+            ));
+        }
+
+        let subdir = subdir::normalize_subdir(subdir)?;
+        let subref = subdir::encode_subdir(&subdir)?;
+        let refs = SubrepoRefs::new(&subref);
+
+        let ref_name = args.ref_name.unwrap_or_else(|| refs.refs_baseline.clone());
+        let head = git_rev_parse_commit(&state.workdir, "HEAD")?;
+        repo.reference(
+            ref_name.as_str(),
+            head,
+            gix::refs::transaction::PreviousValue::Any,
+            "",
+        )
+        .into_subrepo_result()?;
+
+        return Ok(format!("Updated ref '{ref_name}' to {head}."));
+    }
+
+    if (args.since.is_some() as u8)
+        + (args.from_ref.is_some() as u8)
+        + (args.since_sync as u8)
+        > 1
+    {
+        return Err(Error::user(
+            "Options '--since', '--from-ref', and '--since-sync' are mutually exclusive.",
+        ));
+    }
+
+    let subrepos = if let Some(subdir) = args.subdir.as_deref() {
+        vec![subdir::normalize_subdir(subdir)?]
+    } else if args.all_all {
+        let mut subs = list_subrepos_from_head(&repo)?;
+        subs.sort();
+        subs
+    } else if args.all {
+        let subs = list_subrepos_from_head(&repo)?;
+        let mut subs = filter_top_level_subrepos(subs);
+        subs.sort();
+        subs
+    } else {
+        return Err(Error::user(
+            "Command 'patches' requires a subdir unless '--all' or '--ALL' is provided.",
+        ));
+    };
+
+    let mut out = String::new();
+    for subdir in subrepos {
+        let is_tracked = state.workdir.join(&subdir).join(".gitrepo").is_file();
+        if !is_tracked {
+            out.push_str(&format!("warning: '{subdir}' is not a tracked subrepo\n"));
+        }
+
+        let subref = subdir::encode_subdir(&subdir)?;
+        let refs = SubrepoRefs::new(&subref);
+
+        let base = resolve_patches_base(&state.workdir, &repo, &subdir, &refs, &args)?;
+        let range = format!("{}..HEAD", base);
+
+        let lines = git_log_subdir(
+            &state.workdir,
+            &subdir,
+            &range,
+            args.style,
+            args.reverse,
+        )?;
+
+        out.push_str(&format!("Git subrepo '{subdir}':\n"));
+        if lines.trim().is_empty() {
+            out.push_str("  (no local patches since last sync)\n\n");
+        } else {
+            for line in lines.lines() {
+                out.push_str("  ");
+                out.push_str(line);
+                out.push('\n');
+            }
+            out.push('\n');
+        }
+    }
+
+    Ok(out.trim_end().to_string())
+}
+
+fn git_log_subdir(
+    repo_root: &Path,
+    subdir: &str,
+    range: &str,
+    style: PatchesStyle,
+    reverse: bool,
+) -> Result<String> {
+    let mut argv: Vec<&str> = vec!["log", "--no-color"];
+    if reverse {
+        argv.push("--reverse");
+    }
+
+    match style {
+        PatchesStyle::Oneline => argv.push("--oneline"),
+        PatchesStyle::Decorate => {
+            argv.push("--oneline");
+            argv.push("--decorate");
+        }
+        PatchesStyle::Stat => argv.push("--stat"),
+        PatchesStyle::NameStatus => argv.push("--name-status"),
+    }
+
+    argv.push(range);
+    argv.push("--");
+    argv.push(subdir);
+
+    let out = git_cli::run_or_command_failed(repo_root, &argv)?;
+    Ok(out.stdout.trim_end().to_string())
+}
+
+fn resolve_patches_base(
+    repo_root: &Path,
+    repo: &gix::Repository,
+    subdir: &str,
+    refs: &SubrepoRefs,
+    args: &PatchesArgs,
+) -> Result<gix::ObjectId> {
+    if let Some(rev) = args.since.as_deref() {
+        return git_rev_parse_commit(repo_root, rev);
+    }
+
+    if let Some(r) = args.from_ref.as_deref() {
+        return git_rev_parse_commit(repo_root, r);
+    }
+
+    if !args.since_sync {
+        if let Some(mut r) = repo
+            .try_find_reference(refs.refs_sync.as_str())
+            .into_subrepo_result()?
+        {
+            return Ok(r.peel_to_commit().into_subrepo_result()?.id);
+        }
+    }
+
+    if let Some(base) = find_last_sync_anchor_commit(repo_root, subdir)? {
+        return Ok(base);
+    }
+
+    Err(Error::user(format!(
+        "Cannot determine sync base for '{subdir}'.\n\
+Run 'git subrepo patches {subdir} --since <rev>' or 'git subrepo patches {subdir} --update-ref'."
+    )))
+}
+
+fn find_last_sync_anchor_commit(repo_root: &Path, subdir: &str) -> Result<Option<gix::ObjectId>> {
+    let fmt = "--format=%H%x00%B%x00";
+    let out = git_cli::run_or_command_failed(repo_root, &["log", "--no-color", fmt, "--", subdir])?;
+
+    let mut it = out.stdout.split('\0');
+    loop {
+        let Some(hash) = it.next() else { break };
+        if hash.is_empty() {
+            break;
+        }
+
+        let Some(message) = it.next() else { break };
+        if is_sync_anchor_for_subdir(message, subdir) {
+            return Ok(Some(parse_object_id(hash)?));
+        }
+    }
+
+    Ok(None)
+}
+
+fn is_sync_anchor_for_subdir(message: &str, subdir: &str) -> bool {
+    let Some(subject) = message.lines().next() else {
+        return false;
+    };
+
+    let Some(rest) = subject.strip_prefix("git subrepo ") else {
+        return false;
+    };
+
+    let cmd = rest.split_whitespace().next().unwrap_or("");
+    if !matches!(cmd, "clone" | "pull" | "commit" | "push") {
+        return false;
+    }
+
+    match parse_subdir_from_commit_message(message) {
+        Some(s) => s == subdir,
+        None => false,
+    }
+}
+
+fn parse_subdir_from_commit_message(message: &str) -> Option<String> {
+    for line in message.lines() {
+        let Some(rest) = line.strip_prefix("  subdir:") else {
+            continue;
+        };
+
+        let raw = rest.trim();
+        let raw = raw.strip_prefix('"')?.strip_suffix('"')?;
+        return Some(raw.to_string());
+    }
+
+    None
+}
+
+#[cfg(test)]
+mod patches_message_tests {
+    use super::{is_sync_anchor_for_subdir, parse_subdir_from_commit_message};
+
+    #[test]
+    fn parse_subdir_from_commit_message_extracts_quoted_subdir() {
+        let msg = "git subrepo pull foo\n\nsubrepo:\n  subdir:   \"vendor/foo\"\n";
+        assert_eq!(
+            parse_subdir_from_commit_message(msg),
+            Some("vendor/foo".to_string())
+        );
+    }
+
+    #[test]
+    fn is_sync_anchor_for_subdir_matches_supported_commands() {
+        let msg = "git subrepo pull (merge) foo\n\nsubrepo:\n  subdir:   \"foo\"\n";
+        assert!(is_sync_anchor_for_subdir(msg, "foo"));
+        assert!(!is_sync_anchor_for_subdir(msg, "bar"));
+    }
+
+    #[test]
+    fn is_sync_anchor_for_subdir_rejects_unknown_commands() {
+        let msg = "git subrepo unknown foo\n\nsubrepo:\n  subdir:   \"foo\"\n";
+        assert!(!is_sync_anchor_for_subdir(msg, "foo"));
+    }
+}
+
 pub struct CleanArgs {
     pub subdir: String,
     pub force: bool,
 }
 
 pub fn clean(args: CleanArgs) -> Result<Vec<String>> {
-    let repo = crate::repo::discover_repo()?;
+    let repo = git_subrepo_core::repo::discover_repo()?;
     let state = ensure_repo_is_ready(&repo, "clean", true, false)?;
 
     let subdir = subdir::normalize_subdir(&args.subdir)?;
@@ -324,6 +595,8 @@ pub fn clean(args: CleanArgs) -> Result<Vec<String>> {
             refs.refs_branch.as_str(),
             refs.refs_commit.as_str(),
             refs.refs_push.as_str(),
+            refs.refs_sync.as_str(),
+            refs.refs_baseline.as_str(),
             &format!("refs/original/refs/heads/{}", refs.branch),
         ] {
             let _ = delete_ref_if_exists(&repo, name)?;
@@ -341,7 +614,7 @@ pub struct ConfigArgs {
 }
 
 pub fn config(args: ConfigArgs) -> Result<String> {
-    let repo = crate::repo::discover_repo()?;
+    let repo = git_subrepo_core::repo::discover_repo()?;
     ensure_repo_is_ready(&repo, "config", true, false)?;
 
     let subdir = subdir::normalize_subdir(&args.subdir)?;
@@ -411,7 +684,7 @@ pub struct BranchArgs {
 }
 
 pub fn branch(args: BranchArgs) -> Result<String> {
-    let repo = crate::repo::discover_repo()?;
+    let repo = git_subrepo_core::repo::discover_repo()?;
     let state = ensure_repo_is_ready(&repo, "branch", true, true)?;
 
     let subdir = subdir::normalize_subdir(&args.subdir)?;
@@ -465,7 +738,7 @@ pub struct PullArgs {
 }
 
 pub fn pull(args: PullArgs) -> Result<String> {
-    let repo = crate::repo::discover_repo()?;
+    let repo = git_subrepo_core::repo::discover_repo()?;
     let state = ensure_repo_is_ready(&repo, "pull", true, true)?;
 
     let subdir = subdir::normalize_subdir(&args.subdir)?;
@@ -610,7 +883,7 @@ pub struct PushArgs {
 }
 
 pub fn push(args: PushArgs) -> Result<String> {
-    let repo = crate::repo::discover_repo()?;
+    let repo = git_subrepo_core::repo::discover_repo()?;
     let state = ensure_repo_is_ready(&repo, "push", true, true)?;
 
     let subdir = subdir::normalize_subdir(&args.subdir)?;
@@ -744,8 +1017,10 @@ pub fn push(args: PushArgs) -> Result<String> {
         )?,
     };
 
-    git_commit(
+    git_commit_then_update_sync_ref(
         &state.workdir,
+        &repo,
+        &refs,
         CommitMessageSpec {
             message: Some(msg),
             message_file: args.message_file,
@@ -770,7 +1045,7 @@ pub struct CommitArgs {
 }
 
 pub fn commit(args: CommitArgs) -> Result<String> {
-    let repo = crate::repo::discover_repo()?;
+    let repo = git_subrepo_core::repo::discover_repo()?;
     let state = ensure_repo_is_ready(&repo, "commit", true, true)?;
 
     let subdir = subdir::normalize_subdir(&args.subdir)?;
@@ -1482,8 +1757,10 @@ fn commit_subrepo_to_mainline(
         )?,
     };
 
-    git_commit(
+    git_commit_then_update_sync_ref(
         &state.workdir,
+        repo,
+        refs,
         CommitMessageSpec {
             message: Some(message),
             message_file: opts.message_file,
@@ -1503,6 +1780,24 @@ fn commit_subrepo_to_mainline(
     .into_subrepo_result()?;
 
     Ok(())
+}
+
+fn git_commit_then_update_sync_ref(
+    repo_root: &Path,
+    repo: &gix::Repository,
+    refs: &SubrepoRefs,
+    spec: CommitMessageSpec,
+) -> Result<gix::ObjectId> {
+    git_commit(repo_root, spec)?;
+    let new_head = git_rev_parse_commit(repo_root, "HEAD")?;
+    repo.reference(
+        refs.refs_sync.as_str(),
+        new_head,
+        gix::refs::transaction::PreviousValue::Any,
+        "",
+    )
+    .into_subrepo_result()?;
+    Ok(new_head)
 }
 
 fn git_commit(repo_root: &Path, spec: CommitMessageSpec) -> Result<()> {

@@ -13,6 +13,11 @@ anyhow.workspace = true
 clap = { version = "4.5.60", features = ["derive"] }
 
 git-subrepo-core = { path = "../git-subrepo-core" }
+gix = { workspace = true, features = ["blocking-network-client", "blocking-http-transport-curl", "merge", "revision", "tree-editor", "worktree-mutation", "index", "attributes", "excludes"] }
+gix-filter-branch = { version = "0.4.9", path = "../gix-filter-branch" }
+gix-index = "0.48.0"
+gix-worktree = "0.49.0"
+gix-worktree-state = "0.27.0"
 
 [[bin]]
 name = "git-subrepo-compat"
