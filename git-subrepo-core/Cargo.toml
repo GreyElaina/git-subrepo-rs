@@ -13,6 +13,7 @@ thiserror.workspace = true
 
 gix = { workspace = true, features = [
   "blocking-network-client",
+  "blocking-http-transport-curl",
   "merge",
   "revision",
   "tree-editor",
