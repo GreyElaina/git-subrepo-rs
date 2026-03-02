@@ -262,6 +262,12 @@ fn should_skip(rel: &Path) -> bool {
         return true;
     }
 
+    // If the upstream fixture is managed as a subrepo inside this repository,
+    // it will contain a root `.gitrepo` file which is not part of upstream.
+    if rel == Path::new(".gitrepo") {
+        return true;
+    }
+
     if rel.starts_with("target") {
         return true;
     }
