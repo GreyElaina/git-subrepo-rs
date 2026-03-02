@@ -1,0 +1,14 @@
+[package]
+name = "gix-filter-branch"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+thiserror.workspace = true
+
+gix = { workspace = true, features = ["tree-editor"] }

@@ -1,0 +1,30 @@
+[package]
+name = "git-subrepo-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+thiserror.workspace = true
+
+gix = { workspace = true, features = [
+  "blocking-network-client",
+  "merge",
+  "revision",
+  "tree-editor",
+  "worktree-mutation",
+] }
+
+gix-config.workspace = true
+
+gix-filter-branch = { path = "../gix-filter-branch" }
+
+[features]
+poc-tests = []
+
+[dev-dependencies]
+tempfile.workspace = true

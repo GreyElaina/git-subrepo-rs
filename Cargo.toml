@@ -1,0 +1,27 @@
+[workspace]
+members = [
+  "git-subrepo",
+  "git-subrepo-core",
+  "gix-filter-branch",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+version = "0.4.9"
+license = "MIT OR Apache-2.0"
+rust-version = "1.82"
+
+[workspace.dependencies]
+anyhow = "1"
+thiserror = "2"
+tempfile = "3"
+
+gix = "0.80.0"
+gix-config = "0.53.0"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = "warn"
