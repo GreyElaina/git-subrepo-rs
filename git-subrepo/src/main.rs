@@ -254,7 +254,7 @@ struct PullCmd {
         short = 'r',
         long = "remote",
         value_name = "REMOTE_URL",
-        help = "Override upstream remote"
+        help = "Override tracked upstream remote (requires --update)"
     )]
     remote: Option<String>,
 
@@ -262,7 +262,7 @@ struct PullCmd {
         short = 'b',
         long = "branch",
         value_name = "BRANCH",
-        help = "Override upstream branch"
+        help = "Override tracked upstream branch (requires --update)"
     )]
     branch: Option<String>,
 
@@ -305,7 +305,7 @@ struct PushCmd {
         short = 'r',
         long = "remote",
         value_name = "REMOTE_URL",
-        help = "Override upstream remote"
+        help = "Push destination remote (use --update to persist as tracked upstream)"
     )]
     remote: Option<String>,
 
@@ -313,7 +313,7 @@ struct PushCmd {
         short = 'b',
         long = "branch",
         value_name = "BRANCH",
-        help = "Override upstream branch"
+        help = "Push destination branch (use --update to persist as tracked upstream)"
     )]
     branch: Option<String>,
 
