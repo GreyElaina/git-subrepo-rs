@@ -158,7 +158,11 @@ git log refs/subrepo/<subref>/fetch
 
 ### Push reconstructs a branch
 
-`push` reconstructs a subrepo branch (typically via `git subrepo branch`) and pushes that branch upstream.
+`push` internally runs `git subrepo branch` to scan mainline history and
+reconstruct individual commits, then pushes that branch upstream.
+
+This means **mainline rebases that touch `<subdir>/` will invalidate the
+`parent` field** — see [Known pitfalls](#known-pitfalls).
 
 ## Command reference
 
@@ -266,11 +270,15 @@ Common options:
   git subrepo config <subdir> branch <branch> --force
   ```
 
-- **Nested subrepos**: use `status --ALL` and `clean --ALL` if you need to operate on nested subrepos.
+- **Nested subrepos are not supported.** `status --ALL` and `clean --ALL`
+  can discover all subrepos recursively, but workflows involving
+  subrepos-within-subrepos are undefined.
 
 ## Working tree safety (non-ignored untracked files)
 
 When updating `<subdir>/` contents (e.g. `clone`, `pull`, `commit`), `git subrepo` aborts if a checkout would overwrite a **non-ignored untracked** path under `<subdir>/`.
+
+If non-ignored untracked files exist but would *not* be overwritten, `git subrepo` emits an advisory warning (non-fatal) instead of aborting.
 
 Force operations allow overwriting.
 
