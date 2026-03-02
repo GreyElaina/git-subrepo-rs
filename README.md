@@ -18,20 +18,23 @@ git subrepo --version
 
 git subrepo clone <remote-url> [<subdir>]
 git subrepo init <subdir>
-git subrepo pull <subdir>
-git subrepo push <subdir>
+git subrepo pull [<subdir>|--all|-A]
+git subrepo push [<subdir>|--all|-A]
 
-git subrepo fetch <subdir>
-git subrepo branch <subdir>
+git subrepo fetch [<subdir>|--all|-A]
+git subrepo branch [<subdir>|--all|-A]
 git subrepo commit <subdir> [<subrepo-ref>]
 git subrepo config <subdir> <option> [<value>]
 
-git subrepo status [<subdir>|--all|--ALL]
-git subrepo clean <subdir>|--all|--ALL
+git subrepo status [<subdir>|--all|-A]
+git subrepo clean [<subdir>|--all|-A]
 
-git subrepo patches <subdir> [--since <rev>|--from-ref <ref>|--since-sync] [--style <style>] [--reverse]
+git subrepo patches [<subdir>|--all|-A]
+                 [--since <rev>|--from-ref <ref>|--since-sync]
+                 [--style <style>]
+                 [--reverse]
+
 git subrepo patches <subdir> --update-ref [--ref-name <ref>]
-git subrepo patches --all|--ALL [--style <style>] [--reverse]
 ```
 
 ## Description
@@ -113,15 +116,15 @@ Add a repository as a subrepo into a subdirectory.
 
 Turn an existing subdirectory into a subrepo.
 
-### `git subrepo fetch <subdir>`
+### `git subrepo fetch [<subdir>|--all|-A]`
 
 Fetch the upstream content for a subrepo.
 
-### `git subrepo branch <subdir>`
+### `git subrepo branch [<subdir>|--all|-A]`
 
 Create a subrepo branch containing local subrepo commits.
 
-### `git subrepo pull <subdir>`
+### `git subrepo pull [<subdir>|--all|-A]`
 
 Pull upstream changes into the subrepo subdirectory.
 
@@ -129,15 +132,15 @@ Pull upstream changes into the subrepo subdirectory.
 
 Commit the content of a subrepo branch into the mainline history.
 
-### `git subrepo push <subdir>`
+### `git subrepo push [<subdir>|--all|-A]`
 
 Push local subrepo changes upstream.
 
-### `git subrepo status [<subdir>|--all|--ALL]`
+### `git subrepo status [<subdir>|--all|-A]`
 
 Show status for one subrepo or multiple subrepos.
 
-### `git subrepo clean <subdir>|--all|--ALL`
+### `git subrepo clean [<subdir>|--all|-A]`
 
 Remove artifacts created by `fetch` and `branch` (and commands that call them).
 
@@ -145,7 +148,7 @@ Remove artifacts created by `fetch` and `branch` (and commands that call them).
 
 Read or update configuration values in `subdir/.gitrepo`.
 
-### `git subrepo patches [<subdir>|--all|--ALL]`
+### `git subrepo patches [<subdir>|--all|-A]`
 
 List local mainline commits affecting a subrepo subdirectory since the last sync.
 

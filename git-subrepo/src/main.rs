@@ -167,10 +167,18 @@ struct InitCmd {
 }
 
 #[derive(Debug, Args)]
-#[command(about = "Fetch upstream content for a subrepo")]
+#[command(about = "Fetch upstream content for one or more subrepos")]
 struct FetchCmd {
-    #[arg(value_name = "SUBDIR", help = "Subrepo subdirectory")]
-    subdir: String,
+    #[arg(
+        value_name = "SUBDIR",
+        required_unless_present_any = ["all"],
+        conflicts_with_all = ["all"],
+        help = "Subrepo subdirectory"
+    )]
+    subdir: Option<String>,
+
+    #[arg(long = "all", short = 'A', help = "Fetch for all top-level subrepos")]
+    all: bool,
 
     #[arg(
         short = 'r',
@@ -197,10 +205,18 @@ struct FetchCmd {
 }
 
 #[derive(Debug, Args)]
-#[command(about = "Create or update the subrepo branch for SUBDIR")]
+#[command(about = "Create or update the subrepo branch for one or more subrepos")]
 struct BranchCmd {
-    #[arg(value_name = "SUBDIR", help = "Subrepo subdirectory")]
-    subdir: String,
+    #[arg(
+        value_name = "SUBDIR",
+        required_unless_present_any = ["all"],
+        conflicts_with_all = ["all"],
+        help = "Subrepo subdirectory"
+    )]
+    subdir: Option<String>,
+
+    #[arg(long = "all", short = 'A', help = "Operate on all top-level subrepos")]
+    all: bool,
 
     #[arg(
         short = 'f',
@@ -214,10 +230,18 @@ struct BranchCmd {
 }
 
 #[derive(Debug, Args)]
-#[command(about = "Pull upstream changes into the subrepo subdirectory")]
+#[command(about = "Pull upstream changes into one or more subrepo subdirectories")]
 struct PullCmd {
-    #[arg(value_name = "SUBDIR", help = "Subrepo subdirectory")]
-    subdir: String,
+    #[arg(
+        value_name = "SUBDIR",
+        required_unless_present_any = ["all"],
+        conflicts_with_all = ["all"],
+        help = "Subrepo subdirectory"
+    )]
+    subdir: Option<String>,
+
+    #[arg(long = "all", short = 'A', help = "Operate on all top-level subrepos")]
+    all: bool,
 
     #[arg(
         short = 'f',
@@ -254,10 +278,18 @@ struct PullCmd {
 }
 
 #[derive(Debug, Args)]
-#[command(about = "Push local subrepo changes upstream")]
+#[command(about = "Push local subrepo changes upstream for one or more subrepos")]
 struct PushCmd {
-    #[arg(value_name = "SUBDIR", help = "Subrepo subdirectory")]
-    subdir: String,
+    #[arg(
+        value_name = "SUBDIR",
+        required_unless_present_any = ["all"],
+        conflicts_with_all = ["all"],
+        help = "Subrepo subdirectory"
+    )]
+    subdir: Option<String>,
+
+    #[arg(long = "all", short = 'A', help = "Operate on all top-level subrepos")]
+    all: bool,
 
     #[arg(short = 'f', long = "force", help = "Force push")]
     force: bool,
@@ -323,19 +355,18 @@ struct CommitCmd {
 struct StatusCmd {
     #[arg(
         value_name = "SUBDIR",
-        conflicts_with_all = ["all", "all_all"],
-        help = "Show status for a single subrepo"
+        required_unless_present_any = ["all"],
+        conflicts_with_all = ["all"],
+        help = "Subrepo subdirectory"
     )]
     subdir: Option<String>,
 
-    #[arg(long = "all", help = "Show status for all top-level subrepos")]
-    all: bool,
-
     #[arg(
-        long = "ALL",
-        help = "Show status for all subrepos, including nested ones"
+        long = "all",
+        short = 'A',
+        help = "Show status for all top-level subrepos"
     )]
-    all_all: bool,
+    all: bool,
 
     #[arg(
         short = 'F',
@@ -355,8 +386,16 @@ struct StatusCmd {
 #[derive(Debug, Args)]
 #[command(about = "Remove local artifacts created by subrepo commands")]
 struct CleanCmd {
-    #[arg(value_name = "SUBDIR", help = "Subrepo subdirectory")]
-    subdir: String,
+    #[arg(
+        value_name = "SUBDIR",
+        required_unless_present_any = ["all"],
+        conflicts_with_all = ["all"],
+        help = "Subrepo subdirectory"
+    )]
+    subdir: Option<String>,
+
+    #[arg(long = "all", short = 'A', help = "Clean all top-level subrepos")]
+    all: bool,
 
     #[arg(short = 'f', long = "force", help = "Also delete refs and backup refs")]
     force: bool,
@@ -393,19 +432,18 @@ struct ConfigCmd {
 struct PatchesCmd {
     #[arg(
         value_name = "SUBDIR",
-        conflicts_with_all = ["all", "all_all"],
+        required_unless_present_any = ["all"],
+        conflicts_with_all = ["all"],
         help = "Subrepo subdirectory"
     )]
     subdir: Option<String>,
 
-    #[arg(long = "all", help = "List patches for all top-level subrepos")]
-    all: bool,
-
     #[arg(
-        long = "ALL",
-        help = "List patches for all subrepos, including nested ones"
+        long = "all",
+        short = 'A',
+        help = "List patches for all top-level subrepos"
     )]
-    all_all: bool,
+    all: bool,
 
     #[arg(
         long = "since",
@@ -496,47 +534,102 @@ fn try_main() -> Result<()> {
             print_out(out);
         }
         Command::Fetch(cmd) => {
-            let out = git_subrepo::fetch(FetchArgs {
-                subdir: cmd.subdir,
-                remote: cmd.remote,
-                branch: cmd.branch,
-                force: cmd.force,
-            })?;
-            print_out(out);
+            if cmd.all {
+                for subdir in git_subrepo::subrepos(true)? {
+                    let out = git_subrepo::fetch(FetchArgs {
+                        subdir,
+                        remote: cmd.remote.clone(),
+                        branch: cmd.branch.clone(),
+                        force: cmd.force,
+                    })?;
+                    print_out(out);
+                }
+            } else {
+                let out = git_subrepo::fetch(FetchArgs {
+                    subdir: cmd.subdir.expect("subdir is required"),
+                    remote: cmd.remote,
+                    branch: cmd.branch,
+                    force: cmd.force,
+                })?;
+                print_out(out);
+            }
         }
         Command::Branch(cmd) => {
-            let out = git_subrepo::branch(BranchArgs {
-                subdir: cmd.subdir,
-                force: cmd.force,
-                fetch: cmd.fetch,
-            })?;
-            print_out(out);
+            if cmd.all {
+                for subdir in git_subrepo::subrepos(true)? {
+                    let out = git_subrepo::branch(BranchArgs {
+                        subdir,
+                        force: cmd.force,
+                        fetch: cmd.fetch,
+                    })?;
+                    print_out(out);
+                }
+            } else {
+                let out = git_subrepo::branch(BranchArgs {
+                    subdir: cmd.subdir.expect("subdir is required"),
+                    force: cmd.force,
+                    fetch: cmd.fetch,
+                })?;
+                print_out(out);
+            }
         }
         Command::Pull(cmd) => {
-            let out = git_subrepo::pull(PullArgs {
-                subdir: cmd.subdir,
-                force: cmd.force,
-                remote: cmd.remote,
-                branch: cmd.branch,
-                update: cmd.update,
-                message: cmd.msg.message,
-                message_file: cmd.msg.message_file,
-                edit: cmd.msg.edit,
-            })?;
-            print_out(out);
+            if cmd.all {
+                for subdir in git_subrepo::subrepos(true)? {
+                    let out = git_subrepo::pull(PullArgs {
+                        subdir,
+                        force: cmd.force,
+                        remote: cmd.remote.clone(),
+                        branch: cmd.branch.clone(),
+                        update: cmd.update,
+                        message: cmd.msg.message.clone(),
+                        message_file: cmd.msg.message_file.clone(),
+                        edit: cmd.msg.edit,
+                    })?;
+                    print_out(out);
+                }
+            } else {
+                let out = git_subrepo::pull(PullArgs {
+                    subdir: cmd.subdir.expect("subdir is required"),
+                    force: cmd.force,
+                    remote: cmd.remote,
+                    branch: cmd.branch,
+                    update: cmd.update,
+                    message: cmd.msg.message,
+                    message_file: cmd.msg.message_file,
+                    edit: cmd.msg.edit,
+                })?;
+                print_out(out);
+            }
         }
         Command::Push(cmd) => {
-            let out = git_subrepo::push(PushArgs {
-                subdir: cmd.subdir,
-                force: cmd.force,
-                squash: cmd.squash,
-                remote: cmd.remote,
-                branch: cmd.branch,
-                update: cmd.update,
-                message: cmd.msg.message,
-                message_file: cmd.msg.message_file,
-            })?;
-            print_out(out);
+            if cmd.all {
+                for subdir in git_subrepo::subrepos(true)? {
+                    let out = git_subrepo::push(PushArgs {
+                        subdir,
+                        force: cmd.force,
+                        squash: cmd.squash,
+                        remote: cmd.remote.clone(),
+                        branch: cmd.branch.clone(),
+                        update: cmd.update,
+                        message: cmd.msg.message.clone(),
+                        message_file: cmd.msg.message_file.clone(),
+                    })?;
+                    print_out(out);
+                }
+            } else {
+                let out = git_subrepo::push(PushArgs {
+                    subdir: cmd.subdir.expect("subdir is required"),
+                    force: cmd.force,
+                    squash: cmd.squash,
+                    remote: cmd.remote,
+                    branch: cmd.branch,
+                    update: cmd.update,
+                    message: cmd.msg.message,
+                    message_file: cmd.msg.message_file,
+                })?;
+                print_out(out);
+            }
         }
         Command::Commit(cmd) => {
             let out = git_subrepo::commit(CommitArgs {
@@ -552,25 +645,38 @@ fn try_main() -> Result<()> {
         }
         Command::Status(cmd) => {
             if cmd.quiet {
-                let include_nested = cmd.all_all;
-                for s in git_subrepo::subrepos(include_nested)? {
-                    println!("{s}");
+                if let Some(subdir) = cmd.subdir {
+                    println!("{subdir}");
+                } else {
+                    for s in git_subrepo::subrepos(true)? {
+                        println!("{s}");
+                    }
                 }
             } else {
                 let out = git_subrepo::status(StatusArgs {
                     subdir: cmd.subdir,
                     all: cmd.all,
-                    all_all: cmd.all_all,
+                    all_all: false,
                     fetch: cmd.fetch,
                 })?;
                 print_out(out);
             }
         }
         Command::Clean(cmd) => {
-            let removed = git_subrepo::clean(CleanArgs {
-                subdir: cmd.subdir,
-                force: cmd.force,
-            })?;
+            let subdirs = if cmd.all {
+                git_subrepo::subrepos(true)?
+            } else {
+                vec![cmd.subdir.expect("subdir is required")]
+            };
+
+            let mut removed: Vec<String> = Vec::new();
+            for subdir in subdirs {
+                removed.extend(git_subrepo::clean(CleanArgs {
+                    subdir,
+                    force: cmd.force,
+                })?);
+            }
+
             if !removed.is_empty() {
                 println!("{}", removed.join("\n"));
             }
@@ -588,7 +694,7 @@ fn try_main() -> Result<()> {
             let out = git_subrepo::patches(PatchesArgs {
                 subdir: cmd.subdir,
                 all: cmd.all,
-                all_all: cmd.all_all,
+                all_all: false,
                 since: cmd.since,
                 from_ref: cmd.from_ref,
                 since_sync: cmd.since_sync,

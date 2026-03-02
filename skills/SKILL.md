@@ -229,18 +229,36 @@ Common options:
 - `--squash`
 - `--message <msg>` / `--file <path>`
 
-### `git subrepo status [<subdir>|--all|--ALL]`
+### `git subrepo status [<subdir>|--all|-A]`
 
 Common options:
 
 - `--fetch`
 - `--quiet`
 
-### `git subrepo clean <subdir>|--all|--ALL`
+### `git subrepo clean [<subdir>|--all|-A]`
 
 Common options:
 
 - `--force`
+
+### `git subrepo patches [<subdir>|--all|-A]`
+
+List local mainline commits affecting a subrepo since the last sync.
+
+Base selection order:
+
+- `--since <rev>`
+- `--from-ref <ref>`
+- `refs/subrepo/<subref>/sync` if present
+- fallback to commit-message anchor
+
+Common options:
+
+- `--style <oneline|decorate|stat|name-status>`
+- `--reverse`
+- `--update-ref` (writes `refs/subrepo/<subref>/baseline`)
+- `--ref-name <ref>`
 
 ### `git subrepo config <subdir> <option> [<value>]`
 
@@ -272,7 +290,7 @@ Common options:
   git subrepo config <subdir> branch <branch> --force
   ```
 
-- **Nested subrepos are not supported.** `status --ALL` and `clean --ALL`
+- **Nested subrepos are not supported.** `status --all` and `clean --all`
   can discover all subrepos recursively, but workflows involving
   subrepos-within-subrepos are undefined.
 
