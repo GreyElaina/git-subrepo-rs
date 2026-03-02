@@ -1,6 +1,10 @@
 ---
 name: git-subrepo
-description: Usage guide for the `git subrepo` command (a Git submodule alternative) as implemented by this repository.
+description: >
+  Provides step-by-step usage guidance for the git-subrepo CLI tool.
+  Use when the user wants to clone, pull, push, fetch, branch, commit,
+  init, clean, or configure a subrepo; or when diagnosing subrepo errors
+  or conflicts in this repository.
 ---
 
 # git-subrepo
@@ -11,6 +15,16 @@ description: Usage guide for the `git subrepo` command (a Git submodule alternat
 - push local subdirectory changes back upstream.
 
 A subrepo is identified by the presence of a `<subdir>/.gitrepo` file.
+
+## Contents
+
+- [When to use](#when-to-use)
+- [Key concepts](#key-concepts)
+- [Common workflows](#common-workflows)
+- [History model](#history-model)
+- [Command reference](#command-reference)
+- [Known pitfalls](#known-pitfalls)
+- [Working tree safety](#working-tree-safety-non-ignored-untracked-files)
 
 ## When to use
 
@@ -28,6 +42,31 @@ Typical use-cases:
 - **`.gitrepo`**: INI-like metadata file stored at `<subdir>/.gitrepo`.
 - **Join method**: how the subrepo branch is joined with upstream during `pull`/`push` workflows (`merge` or `rebase`).
 - **Linked worktree**: on conflicts, a linked worktree is created under `<git-common-dir>/tmp/subrepo/<subref>` to resolve conflicts.
+
+### `.gitrepo` example
+
+```ini
+; DO NOT EDIT (unless you know what you are doing)
+;
+; This subdirectory is a git "subrepo", and this file is maintained by the
+; git-subrepo command. See https://github.com/ingydotnet/git-subrepo#readme
+;
+[subrepo]
+    remote = https://github.com/org/lib.git
+    branch = main
+    commit = a1b2c3d4
+    parent = e5f6g7h8
+    method = merge
+    cmdver = 0.4.9
+```
+
+Field meanings:
+
+- `remote`: upstream URL
+- `branch`: upstream branch
+- `commit`: last synced upstream commit SHA
+- `parent`: mainline commit SHA that performed the last sync
+- `method`: `merge` or `rebase`
 
 ## Common workflows
 
@@ -55,16 +94,24 @@ If you know the upstream:
 git subrepo init <subdir> --remote <remote-url> --branch <branch>
 ```
 
+After `init`, you typically push to an empty upstream repository:
+
+```bash
+git subrepo push <subdir> --remote <remote-url>
+```
+
 ### Pull upstream changes
 
 ```bash
 git subrepo pull <subdir>
 ```
 
-Notes:
+If the operation conflicts, resolve in the linked worktree and then finalize:
 
-- If the subrepo is up to date, the command prints an up-to-date message.
-- On conflicts, resolve them in the linked worktree and then run `git subrepo commit`.
+```bash
+git subrepo commit <subdir>
+git subrepo clean <subdir>
+```
 
 ### Push local changes upstream
 
@@ -72,7 +119,7 @@ Notes:
 git subrepo push <subdir>
 ```
 
-### Conflict resolution workflow
+### Conflict resolution workflow (linked worktree)
 
 When `pull` or `push` requires a merge/rebase that conflicts:
 
@@ -97,13 +144,25 @@ git subrepo commit <subdir>
 git subrepo clean <subdir>
 ```
 
+## History model
+
+### Mainline commits are squashed
+
+`pull` and `commit` write the subrepo contents into `<subdir>/` as a single commit in your current branch.
+
+The full upstream history is preserved in internal refs and can be inspected with:
+
+```bash
+git log refs/subrepo/<subref>/fetch
+```
+
+### Push reconstructs a branch
+
+`push` reconstructs a subrepo branch (typically via `git subrepo branch`) and pushes that branch upstream.
+
 ## Command reference
 
-This implementation aims to match upstream semantics and output.
-
 ### `git subrepo clone <remote> [<subdir>]`
-
-Clone the upstream repository into `<subdir>` and create `<subdir>/.gitrepo`.
 
 Common options:
 
@@ -114,8 +173,6 @@ Common options:
 
 ### `git subrepo init <subdir>`
 
-Turn an existing subdirectory into a subrepo.
-
 Common options:
 
 - `--remote <url>`
@@ -123,8 +180,6 @@ Common options:
 - `--method <merge|rebase>`
 
 ### `git subrepo fetch <subdir>`
-
-Fetch the upstream content and update internal subrepo refs.
 
 Common options:
 
@@ -134,26 +189,12 @@ Common options:
 
 ### `git subrepo branch <subdir>`
 
-Create a `subrepo/<subdir>` branch containing commits relevant to `<subdir>`.
-
 Common options:
 
 - `--fetch`
 - `--force`
-
-### `git subrepo commit <subdir> [<subrepo-ref>]`
-
-Write the content of `<subrepo-ref>` (default: `subrepo/<subdir>`) into `<subdir>/` and create a single mainline commit.
-
-Common options:
-
-- `--fetch`
-- `--force`
-- `--message <msg>` / `--file <path>` / `--edit`
 
 ### `git subrepo pull <subdir>`
-
-Fetch + branch + merge/rebase + commit.
 
 Common options:
 
@@ -163,9 +204,15 @@ Common options:
 - `--force`
 - `--message <msg>` / `--file <path>` / `--edit`
 
-### `git subrepo push <subdir>`
+### `git subrepo commit <subdir> [<subrepo-ref>]`
 
-Push local subrepo branch history upstream.
+Common options:
+
+- `--fetch`
+- `--force`
+- `--message <msg>` / `--file <path>` / `--edit`
+
+### `git subrepo push <subdir>`
 
 Common options:
 
@@ -178,8 +225,6 @@ Common options:
 
 ### `git subrepo status [<subdir>|--all|--ALL]`
 
-Show subrepo presence/status.
-
 Common options:
 
 - `--fetch`
@@ -187,19 +232,45 @@ Common options:
 
 ### `git subrepo clean <subdir>|--all|--ALL`
 
-Remove artifacts created by `fetch` and `branch` (refs, branches, linked worktrees).
-
 Common options:
 
 - `--force`
 
 ### `git subrepo config <subdir> <option> [<value>]`
 
-Read or update values in `<subdir>/.gitrepo`.
+Common options:
+
+- `--force` (required for changing autogenerated fields)
+
+## Known pitfalls
+
+- **Mainline rebase breaks push**: if mainline commits touching `<subdir>/` are rebased after a `pull`, the `.gitrepo` `parent` field can become stale and `push` may fail. Fix: update `parent` in `.gitrepo` or run:
+
+  ```bash
+  git subrepo config <subdir> parent <sha> --force
+  ```
+
+- **Finalize after manual conflict resolution**: after resolving conflicts in the linked worktree, run both:
+
+  ```bash
+  git subrepo commit <subdir>
+  git subrepo clean <subdir>
+  ```
+
+  Skipping `clean` can leave stale refs/worktrees.
+
+- **`init` without `--remote`**: `init` without `--remote` creates a `.gitrepo` with no upstream configured; `pull`/`push` will fail until you configure it:
+
+  ```bash
+  git subrepo config <subdir> remote <url> --force
+  git subrepo config <subdir> branch <branch> --force
+  ```
+
+- **Nested subrepos**: use `status --ALL` and `clean --ALL` if you need to operate on nested subrepos.
 
 ## Working tree safety (non-ignored untracked files)
 
-When updating `<subdir>/` contents (e.g. `clone`, `pull`, `commit`), `git subrepo` will abort if a checkout would overwrite a **non-ignored untracked** path under `<subdir>/`.
+When updating `<subdir>/` contents (e.g. `clone`, `pull`, `commit`), `git subrepo` aborts if a checkout would overwrite a **non-ignored untracked** path under `<subdir>/`.
 
 Force operations allow overwriting.
 
