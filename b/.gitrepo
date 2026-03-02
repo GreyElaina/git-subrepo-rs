@@ -1,0 +1,12 @@
+; DO NOT EDIT (unless you know what you are doing)
+;
+; This subdirectory is a git "subrepo", and this file is maintained by the
+; git-subrepo command. See https://github.com/ingydotnet/git-subrepo#readme
+;
+[subrepo]
+remote = /tmp/git-subrepo-cycle2.ueEmMy/B
+branch = master
+commit = 77a82216eed70df60fa4171d5f64283c202697cb
+parent = 30497930e7be04a4fa967d5495d65797d5751580
+method = merge
+cmdver = 0.4.9
