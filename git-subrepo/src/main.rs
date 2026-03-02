@@ -468,16 +468,13 @@ struct PatchesCmd {
     )]
     since_sync: bool,
 
-    #[arg(
-        long = "update-ref",
-        help = "Update the baseline ref to the current HEAD"
-    )]
+    #[arg(long = "update-ref", help = "Update the sync ref to the current HEAD")]
     update_ref: bool,
 
     #[arg(
         long = "ref-name",
         value_name = "REF",
-        help = "Ref name to update when using --update-ref (defaults to refs/subrepo/<subref>/baseline)"
+        help = "Ref name to update when using --update-ref (defaults to refs/subrepo/<subref>/sync)"
     )]
     ref_name: Option<String>,
 

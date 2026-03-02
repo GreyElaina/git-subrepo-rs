@@ -251,14 +251,13 @@ Base selection order:
 - `--since <rev>`
 - `--from-ref <ref>`
 - `refs/subrepo/<subref>/sync` if present
-- `refs/subrepo/<subref>/baseline` if present
 - fallback to commit-message anchor
 
 Common options:
 
 - `--style <oneline|decorate|stat|name-status>`
 - `--reverse`
-- `--update-ref` (writes `refs/subrepo/<subref>/baseline`)
+- `--update-ref` (writes `refs/subrepo/<subref>/sync`)
 - `--ref-name <ref>`
 
 ### `git subrepo config <subdir> <option> [<value>]`

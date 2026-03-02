@@ -6,7 +6,6 @@ pub struct SubrepoRefs {
     pub refs_fetch: String,
     pub refs_push: String,
     pub refs_sync: String,
-    pub refs_baseline: String,
 }
 
 impl SubrepoRefs {
@@ -20,7 +19,6 @@ impl SubrepoRefs {
             refs_fetch: format!("{prefix}/fetch"),
             refs_push: format!("{prefix}/push"),
             refs_sync: format!("{prefix}/sync"),
-            refs_baseline: format!("{prefix}/baseline"),
         }
     }
 }

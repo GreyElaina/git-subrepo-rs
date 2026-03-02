@@ -345,7 +345,7 @@ pub fn patches(args: PatchesArgs) -> Result<String> {
         let subref = subdir::encode_subdir(&subdir)?;
         let refs = SubrepoRefs::new(&subref);
 
-        let ref_name = args.ref_name.unwrap_or_else(|| refs.refs_baseline.clone());
+        let ref_name = args.ref_name.unwrap_or_else(|| refs.refs_sync.clone());
         let head = git_rev_parse_commit(&state.workdir, "HEAD")?;
         repo.reference(
             ref_name.as_str(),
@@ -465,13 +465,6 @@ fn resolve_patches_base(
         {
             return Ok(r.peel_to_commit().into_subrepo_result()?.id);
         }
-
-        if let Some(mut r) = repo
-            .try_find_reference(refs.refs_baseline.as_str())
-            .into_subrepo_result()?
-        {
-            return Ok(r.peel_to_commit().into_subrepo_result()?.id);
-        }
     }
 
     if let Some(base) = find_last_sync_anchor_commit(repo_root, subdir)? {
@@ -481,7 +474,7 @@ fn resolve_patches_base(
     Err(Error::user(format!(
         "Cannot determine sync base for '{subdir}'.\n\
 Run 'git subrepo patches {subdir} --since <rev>' or\n\
-  'git subrepo patches {subdir} --update-ref' (creates refs/subrepo/<subref>/baseline)."
+  'git subrepo patches {subdir} --update-ref' (updates refs/subrepo/<subref>/sync)."
     )))
 }
 
@@ -594,7 +587,6 @@ pub fn clean(args: CleanArgs) -> Result<Vec<String>> {
             refs.refs_commit.as_str(),
             refs.refs_push.as_str(),
             refs.refs_sync.as_str(),
-            refs.refs_baseline.as_str(),
             &format!("refs/original/refs/heads/{}", refs.branch),
         ] {
             let _ = delete_ref_if_exists(&repo, name)?;
