@@ -308,6 +308,34 @@ pub enum PatchesStyle {
     NameStatus,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PatchesBaseSource {
+    Since,
+    FromRef,
+    SyncRef,
+    SyncAnchor,
+    GitRepoIntro,
+}
+
+impl std::fmt::Display for PatchesBaseSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            PatchesBaseSource::Since => "since",
+            PatchesBaseSource::FromRef => "from-ref",
+            PatchesBaseSource::SyncRef => "sync-ref",
+            PatchesBaseSource::SyncAnchor => "sync-anchor",
+            PatchesBaseSource::GitRepoIntro => "gitrepo-intro",
+        };
+        f.write_str(s)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PatchesBase {
+    id: gix::ObjectId,
+    source: PatchesBaseSource,
+}
+
 pub struct PatchesArgs {
     pub subdir: Option<String>,
 
@@ -363,16 +391,23 @@ pub fn patches(args: PatchesArgs) -> Result<String> {
         let refs = SubrepoRefs::new(&subref);
 
         let base = resolve_patches_base(&state.workdir, &repo, &subdir, &refs, &args)?;
-        let range = format!("{}..HEAD", base);
+        let base_line = git_commit_oneline(&state.workdir, base.id)?;
 
+        let range = format!("{}..HEAD", base.id);
         let lines = git_log_subdir(&state.workdir, &subdir, &range, args.style, args.reverse)?;
 
         out.push_str(&format!("Git subrepo '{subdir}':\n"));
+        out.push_str(&format!(
+            "  base: {base_line} [{source}]\n",
+            source = base.source
+        ));
+
         if lines.trim().is_empty() {
-            out.push_str("  (no local patches since last sync)\n\n");
+            out.push_str("  patches: (none)\n\n");
         } else {
+            out.push_str("  patches:\n");
             for line in lines.lines() {
-                out.push_str("  ");
+                out.push_str("    ");
                 out.push_str(line);
                 out.push('\n');
             }
@@ -381,6 +416,18 @@ pub fn patches(args: PatchesArgs) -> Result<String> {
     }
 
     Ok(out.trim_end().to_string())
+}
+
+fn git_commit_oneline(repo_root: &Path, id: gix::ObjectId) -> Result<String> {
+    let mut argv: Vec<String> = Vec::new();
+    argv.push("show".to_string());
+    argv.push("-s".to_string());
+    argv.push("--no-color".to_string());
+    argv.push("--format=%h %s".to_string());
+    argv.push(id.to_string());
+
+    let argv_ref: Vec<&str> = argv.iter().map(|s| s.as_str()).collect();
+    git_cli::run_checked_stdout(repo_root, &argv_ref)
 }
 
 fn git_log_subdir(
@@ -419,18 +466,28 @@ fn resolve_patches_base(
     subdir: &str,
     refs: &SubrepoRefs,
     args: &PatchesArgs,
-) -> Result<gix::ObjectId> {
+) -> Result<PatchesBase> {
     if let Some(rev) = args.since.as_deref() {
-        return git_rev_parse_commit(repo_root, rev);
+        return Ok(PatchesBase {
+            id: git_rev_parse_commit(repo_root, rev)?,
+            source: PatchesBaseSource::Since,
+        });
     }
 
     if let Some(r) = args.from_ref.as_deref() {
-        return git_rev_parse_commit(repo_root, r);
+        return Ok(PatchesBase {
+            id: git_rev_parse_commit(repo_root, r)?,
+            source: PatchesBaseSource::FromRef,
+        });
     }
 
     if args.since_sync {
-        return find_last_sync_anchor_commit(repo_root, subdir)?
-            .ok_or_else(|| Error::user(format!("Cannot determine sync base for '{subdir}'.")));
+        let base = find_last_sync_anchor_commit(repo_root, subdir)?
+            .ok_or_else(|| Error::user(format!("Cannot determine sync base for '{subdir}'.")))?;
+        return Ok(PatchesBase {
+            id: base,
+            source: PatchesBaseSource::SyncAnchor,
+        });
     }
 
     let intro = find_gitrepo_added_commit(repo_root, subdir)?;
@@ -439,13 +496,22 @@ fn resolve_patches_base(
         .try_find_reference(refs.refs_sync.as_str())
         .into_subrepo_result()?
     {
-        r.peel_to_commit().into_subrepo_result()?.id
+        PatchesBase {
+            id: r.peel_to_commit().into_subrepo_result()?.id,
+            source: PatchesBaseSource::SyncRef,
+        }
     } else if let Some(base) = find_last_sync_anchor_commit(repo_root, subdir)? {
         update_sync_ref(repo, refs, base)?;
-        base
+        PatchesBase {
+            id: base,
+            source: PatchesBaseSource::SyncAnchor,
+        }
     } else if let Some(base) = intro {
         update_sync_ref(repo, refs, base)?;
-        base
+        PatchesBase {
+            id: base,
+            source: PatchesBaseSource::GitRepoIntro,
+        }
     } else {
         return Err(Error::user(format!(
             "Cannot determine sync base for '{subdir}'.\n\
@@ -457,9 +523,10 @@ Run 'git subrepo patches {subdir} --since <rev>' or\n\
     // Clamp base to at least the introduction commit of `<subdir>/.gitrepo`, so that
     // the add-subrepo commit itself isn't reported as a local patch.
     if let Some(intro) = intro {
-        if base != intro && is_ancestor(repo, base, intro)? {
-            base = intro;
-            update_sync_ref(repo, refs, base)?;
+        if base.id != intro && is_ancestor(repo, base.id, intro)? {
+            base.id = intro;
+            base.source = PatchesBaseSource::GitRepoIntro;
+            update_sync_ref(repo, refs, base.id)?;
         }
     }
 

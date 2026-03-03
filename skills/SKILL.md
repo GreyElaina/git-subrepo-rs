@@ -246,6 +246,8 @@ Common options:
 
 List local mainline commits affecting a subrepo since the last sync.
 
+This command prints the base commit (not counted as a patch), followed by the local patch commits.
+
 If `SUBDIR` is omitted, this command lists patches for all top-level subrepos (equivalent to `--all`).
 
 Base selection order:

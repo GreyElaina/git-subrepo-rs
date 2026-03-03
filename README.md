@@ -151,6 +151,8 @@ Read or update configuration values in `subdir/.gitrepo`.
 
 List local mainline commits affecting a subrepo subdirectory since the last sync.
 
+This command prints the base commit (not counted as a patch), followed by the local patch commits.
+
 If `SUBDIR` is omitted, this command lists patches for all top-level subrepos (equivalent to `--all`).
 
 - Default base: `refs/subrepo/<subref>/sync` (if present). If missing, `patches` will try to initialize it from `SUBDIR/.gitrepo` (`subrepo.parent`).
