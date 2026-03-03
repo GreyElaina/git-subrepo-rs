@@ -428,20 +428,25 @@ fn resolve_patches_base(
         return git_rev_parse_commit(repo_root, r);
     }
 
-    if !args.since_sync {
-        if let Some(mut r) = repo
-            .try_find_reference(refs.refs_sync.as_str())
-            .into_subrepo_result()?
-        {
-            return Ok(r.peel_to_commit().into_subrepo_result()?.id);
-        }
+    if args.since_sync {
+        return find_last_sync_anchor_commit(repo_root, subdir)?
+            .ok_or_else(|| Error::user(format!("Cannot determine sync base for '{subdir}'.")));
+    }
 
-        if let Some(base) = try_init_sync_from_gitrepo_parent(repo_root, repo, subdir, refs)? {
-            return Ok(base);
-        }
+    if let Some(mut r) = repo
+        .try_find_reference(refs.refs_sync.as_str())
+        .into_subrepo_result()?
+    {
+        return Ok(r.peel_to_commit().into_subrepo_result()?.id);
     }
 
     if let Some(base) = find_last_sync_anchor_commit(repo_root, subdir)? {
+        update_sync_ref(repo, refs, base)?;
+        return Ok(base);
+    }
+
+    if let Some(base) = find_gitrepo_added_commit(repo_root, subdir)? {
+        update_sync_ref(repo, refs, base)?;
         return Ok(base);
     }
 
@@ -452,44 +457,39 @@ Run 'git subrepo patches {subdir} --since <rev>' or\n\
     )))
 }
 
-fn try_init_sync_from_gitrepo_parent(
-    repo_root: &Path,
-    repo: &gix::Repository,
-    subdir: &str,
-    refs: &SubrepoRefs,
-) -> Result<Option<gix::ObjectId>> {
-    let gitrepo_path = gitrepo_path(repo, subdir)?;
-    let bytes = match std::fs::read(&gitrepo_path) {
-        Ok(b) => b,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(err) => return Err(err.into()),
-    };
-
-    let state = GitRepoState::parse(&bytes)?;
-    if state.parent.is_empty() {
-        return Ok(None);
-    }
-
-    let parent = parse_object_id(&state.parent)?;
-    let head = git_rev_parse_commit(repo_root, "HEAD")?;
-
-    let base = repo
-        .merge_base(parent, head)
-        .into_subrepo_result()?
-        .detach();
-    if base != parent {
-        return Ok(None);
-    }
-
+fn update_sync_ref(repo: &gix::Repository, refs: &SubrepoRefs, base: gix::ObjectId) -> Result<()> {
     repo.reference(
         refs.refs_sync.as_str(),
-        parent,
+        base,
         gix::refs::transaction::PreviousValue::Any,
         "",
     )
     .into_subrepo_result()?;
+    Ok(())
+}
 
-    Ok(Some(parent))
+fn find_gitrepo_added_commit(repo_root: &Path, subdir: &str) -> Result<Option<gix::ObjectId>> {
+    let path = format!("{subdir}/.gitrepo");
+    let out = git_cli::run_or_command_failed(
+        repo_root,
+        &[
+            "log",
+            "--no-color",
+            "--diff-filter=A",
+            "--format=%H",
+            "-n",
+            "1",
+            "--",
+            &path,
+        ],
+    )?;
+
+    let hex = out.stdout.trim();
+    if hex.is_empty() {
+        return Ok(None);
+    }
+
+    Ok(Some(parse_object_id(hex)?))
 }
 
 fn find_last_sync_anchor_commit(repo_root: &Path, subdir: &str) -> Result<Option<gix::ObjectId>> {
