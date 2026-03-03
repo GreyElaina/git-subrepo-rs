@@ -345,9 +345,11 @@ pub fn patches(args: PatchesArgs) -> Result<String> {
         subs.sort();
         subs
     } else {
-        return Err(Error::user(
-            "Command 'patches' requires a subdir unless '--all' or '--ALL' is provided.",
-        ));
+        // Default: behave like '--all'.
+        let subs = list_subrepos_from_head(&repo)?;
+        let mut subs = filter_top_level_subrepos(subs);
+        subs.sort();
+        subs
     };
 
     let mut out = String::new();

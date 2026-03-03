@@ -242,9 +242,11 @@ Common options:
 
 - `--force`
 
-### `git subrepo patches [<subdir>|--all|-A]`
+### `git subrepo patches [<subdir>] [--all|-A]`
 
 List local mainline commits affecting a subrepo since the last sync.
+
+If `SUBDIR` is omitted, this command lists patches for all top-level subrepos (equivalent to `--all`).
 
 Base selection order:
 

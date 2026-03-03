@@ -427,12 +427,11 @@ struct ConfigCmd {
 #[derive(Debug, Args)]
 #[command(
     about = "Show local mainline commits affecting a subrepo since the last sync",
-    after_help = "Examples:\n  git subrepo patches vendor/repo\n  git subrepo patches vendor/repo --since HEAD~20\n  git subrepo patches vendor/repo --from-ref HEAD~50\n  git subrepo patches --all\n"
+    after_help = "Examples:\n  git subrepo patches\n  git subrepo patches vendor/repo\n  git subrepo patches --since HEAD~20\n  git subrepo patches vendor/repo --since HEAD~20\n  git subrepo patches vendor/repo --from-ref HEAD~50\n  git subrepo patches --all\n"
 )]
 struct PatchesCmd {
     #[arg(
         value_name = "SUBDIR",
-        required_unless_present_any = ["all"],
         conflicts_with_all = ["all"],
         help = "Subrepo subdirectory"
     )]
@@ -441,7 +440,7 @@ struct PatchesCmd {
     #[arg(
         long = "all",
         short = 'A',
-        help = "List patches for all top-level subrepos"
+        help = "List patches for all top-level subrepos (default when SUBDIR is omitted)"
     )]
     all: bool,
 
@@ -678,9 +677,10 @@ fn try_main() -> Result<()> {
             print_out(out);
         }
         Command::Patches(cmd) => {
+            let all = cmd.all || cmd.subdir.is_none();
             let out = git_subrepo::patches(PatchesArgs {
                 subdir: cmd.subdir,
-                all: cmd.all,
+                all,
                 all_all: false,
                 since: cmd.since,
                 from_ref: cmd.from_ref,
