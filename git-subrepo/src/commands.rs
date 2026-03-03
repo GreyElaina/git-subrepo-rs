@@ -433,28 +433,49 @@ fn resolve_patches_base(
             .ok_or_else(|| Error::user(format!("Cannot determine sync base for '{subdir}'.")));
     }
 
-    if let Some(mut r) = repo
+    let intro = find_gitrepo_added_commit(repo_root, subdir)?;
+
+    let mut base = if let Some(mut r) = repo
         .try_find_reference(refs.refs_sync.as_str())
         .into_subrepo_result()?
     {
-        return Ok(r.peel_to_commit().into_subrepo_result()?.id);
-    }
-
-    if let Some(base) = find_last_sync_anchor_commit(repo_root, subdir)? {
+        r.peel_to_commit().into_subrepo_result()?.id
+    } else if let Some(base) = find_last_sync_anchor_commit(repo_root, subdir)? {
         update_sync_ref(repo, refs, base)?;
-        return Ok(base);
-    }
-
-    if let Some(base) = find_gitrepo_added_commit(repo_root, subdir)? {
+        base
+    } else if let Some(base) = intro {
         update_sync_ref(repo, refs, base)?;
-        return Ok(base);
-    }
-
-    Err(Error::user(format!(
-        "Cannot determine sync base for '{subdir}'.\n\
+        base
+    } else {
+        return Err(Error::user(format!(
+            "Cannot determine sync base for '{subdir}'.\n\
 Run 'git subrepo patches {subdir} --since <rev>' or\n\
   'git subrepo patches {subdir} --from-ref <ref>'."
-    )))
+        )));
+    };
+
+    // Clamp base to at least the introduction commit of `<subdir>/.gitrepo`, so that
+    // the add-subrepo commit itself isn't reported as a local patch.
+    if let Some(intro) = intro {
+        if base != intro && is_ancestor(repo, base, intro)? {
+            base = intro;
+            update_sync_ref(repo, refs, base)?;
+        }
+    }
+
+    Ok(base)
+}
+
+fn is_ancestor(
+    repo: &gix::Repository,
+    ancestor: gix::ObjectId,
+    head: gix::ObjectId,
+) -> Result<bool> {
+    let base = repo
+        .merge_base(ancestor, head)
+        .into_subrepo_result()?
+        .detach();
+    Ok(base == ancestor)
 }
 
 fn update_sync_ref(repo: &gix::Repository, refs: &SubrepoRefs, base: gix::ObjectId) -> Result<()> {
