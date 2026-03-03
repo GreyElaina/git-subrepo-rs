@@ -251,6 +251,7 @@ Base selection order:
 - `--since <rev>`
 - `--from-ref <ref>`
 - `refs/subrepo/<subref>/sync` if present
+- otherwise, initialize `sync` from `SUBDIR/.gitrepo` (`subrepo.parent`)
 - fallback to commit-message anchor
 
 Common options:

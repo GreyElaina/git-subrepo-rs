@@ -151,7 +151,8 @@ Read or update configuration values in `subdir/.gitrepo`.
 
 List local mainline commits affecting a subrepo subdirectory since the last sync.
 
-- Default base: `refs/subrepo/<subref>/sync` (if present), otherwise a commit-message anchor.
+- Default base: `refs/subrepo/<subref>/sync` (if present). If missing, `patches` will try to initialize it from `SUBDIR/.gitrepo` (`subrepo.parent`).
+  As a fallback, it uses a commit-message anchor.
 - Use `--since` or `--from-ref` for explicit control.
 
 ## Testing

@@ -433,6 +433,10 @@ fn resolve_patches_base(
         {
             return Ok(r.peel_to_commit().into_subrepo_result()?.id);
         }
+
+        if let Some(base) = try_init_sync_from_gitrepo_parent(repo_root, repo, subdir, refs)? {
+            return Ok(base);
+        }
     }
 
     if let Some(base) = find_last_sync_anchor_commit(repo_root, subdir)? {
@@ -444,6 +448,46 @@ fn resolve_patches_base(
 Run 'git subrepo patches {subdir} --since <rev>' or\n\
   'git subrepo patches {subdir} --from-ref <ref>'."
     )))
+}
+
+fn try_init_sync_from_gitrepo_parent(
+    repo_root: &Path,
+    repo: &gix::Repository,
+    subdir: &str,
+    refs: &SubrepoRefs,
+) -> Result<Option<gix::ObjectId>> {
+    let gitrepo_path = gitrepo_path(repo, subdir)?;
+    let bytes = match std::fs::read(&gitrepo_path) {
+        Ok(b) => b,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(err.into()),
+    };
+
+    let state = GitRepoState::parse(&bytes)?;
+    if state.parent.is_empty() {
+        return Ok(None);
+    }
+
+    let parent = parse_object_id(&state.parent)?;
+    let head = git_rev_parse_commit(repo_root, "HEAD")?;
+
+    let base = repo
+        .merge_base(parent, head)
+        .into_subrepo_result()?
+        .detach();
+    if base != parent {
+        return Ok(None);
+    }
+
+    repo.reference(
+        refs.refs_sync.as_str(),
+        parent,
+        gix::refs::transaction::PreviousValue::Any,
+        "",
+    )
+    .into_subrepo_result()?;
+
+    Ok(Some(parent))
 }
 
 fn find_last_sync_anchor_commit(repo_root: &Path, subdir: &str) -> Result<Option<gix::ObjectId>> {
