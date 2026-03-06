@@ -313,6 +313,7 @@ enum PatchesBaseSource {
     Since,
     FromRef,
     SyncRef,
+    GitRepoParent,
     SyncAnchor,
     GitRepoIntro,
 }
@@ -323,6 +324,7 @@ impl std::fmt::Display for PatchesBaseSource {
             PatchesBaseSource::Since => "since",
             PatchesBaseSource::FromRef => "from-ref",
             PatchesBaseSource::SyncRef => "sync-ref",
+            PatchesBaseSource::GitRepoParent => "gitrepo-parent",
             PatchesBaseSource::SyncAnchor => "sync-anchor",
             PatchesBaseSource::GitRepoIntro => "gitrepo-intro",
         };
@@ -490,16 +492,51 @@ fn resolve_patches_base(
         });
     }
 
+    let head = git_rev_parse_commit(repo_root, "HEAD")?;
+
     let intro = find_gitrepo_added_commit(repo_root, subdir)?;
 
-    let mut base = if let Some(mut r) = repo
+    let gitrepo_parent = match read_gitrepo_state(repo, subdir) {
+        Ok(st) if !st.parent.is_empty() => parse_object_id(&st.parent).ok(),
+        _ => None,
+    };
+
+    let sync_ref_id = if let Some(mut r) = repo
         .try_find_reference(refs.refs_sync.as_str())
         .into_subrepo_result()?
     {
-        PatchesBase {
-            id: r.peel_to_commit().into_subrepo_result()?.id,
-            source: PatchesBaseSource::SyncRef,
+        Some(r.peel_to_commit().into_subrepo_result()?.id)
+    } else {
+        None
+    };
+
+    let mut base = if let Some(id) = sync_ref_id {
+        if is_ancestor(repo_root, id, head)? {
+            Some(PatchesBase {
+                id,
+                source: PatchesBaseSource::SyncRef,
+            })
+        } else {
+            None
         }
+    } else {
+        None
+    };
+
+    if base.is_none() {
+        if let Some(parent) = gitrepo_parent {
+            if is_ancestor(repo_root, parent, head)? {
+                update_sync_ref(repo, refs, parent)?;
+                base = Some(PatchesBase {
+                    id: parent,
+                    source: PatchesBaseSource::GitRepoParent,
+                });
+            }
+        }
+    }
+
+    let mut base = if let Some(base) = base {
+        base
     } else if let Some(base) = find_last_sync_anchor_commit(repo_root, subdir)? {
         update_sync_ref(repo, refs, base)?;
         PatchesBase {
@@ -523,7 +560,7 @@ Run 'git subrepo patches {subdir} --since <rev>' or\n\
     // Clamp base to at least the introduction commit of `<subdir>/.gitrepo`, so that
     // the add-subrepo commit itself isn't reported as a local patch.
     if let Some(intro) = intro {
-        if base.id != intro && is_ancestor(repo, base.id, intro)? {
+        if base.id != intro && is_ancestor(repo_root, base.id, intro)? {
             base.id = intro;
             base.source = PatchesBaseSource::GitRepoIntro;
             update_sync_ref(repo, refs, base.id)?;
@@ -533,16 +570,133 @@ Run 'git subrepo patches {subdir} --since <rev>' or\n\
     Ok(base)
 }
 
-fn is_ancestor(
-    repo: &gix::Repository,
-    ancestor: gix::ObjectId,
-    head: gix::ObjectId,
-) -> Result<bool> {
-    let base = repo
-        .merge_base(ancestor, head)
-        .into_subrepo_result()?
-        .detach();
-    Ok(base == ancestor)
+#[cfg(test)]
+mod patches_base_tests {
+    use std::{
+        path::Path,
+        process::{Command, Output},
+    };
+
+    use tempfile::tempdir;
+
+    use super::{
+        parse_object_id, resolve_patches_base, GitRepoState, JoinMethod, PatchesArgs,
+        PatchesBaseSource, PatchesStyle, SubrepoRefs,
+    };
+
+    fn run_git(repo_root: &Path, args: &[&str]) -> Output {
+        Command::new("git")
+            .args(args)
+            .current_dir(repo_root)
+            .output()
+            .expect("git invocation failed")
+    }
+
+    fn git_stdout(repo_root: &Path, args: &[&str]) -> String {
+        let out = run_git(repo_root, args);
+        assert!(
+            out.status.success(),
+            "git {} failed. stdout:\n{}\nstderr:\n{}",
+            args.join(" "),
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    #[test]
+    fn resolve_patches_base_ignores_stale_sync_ref_and_uses_gitrepo_parent() {
+        let dir = tempdir().expect("create temp dir");
+        let root = dir.path();
+
+        git_stdout(root, &["init", "-b", "main", "--quiet"]);
+        git_stdout(root, &["config", "user.email", "test@example.com"]);
+        git_stdout(root, &["config", "user.name", "Test User"]);
+
+        std::fs::create_dir_all(root.join("vendor/foo")).expect("mkdir vendor/foo");
+
+        let mut gitrepo = GitRepoState {
+            remote: "https://example.com/foo.git".to_string(),
+            branch: "main".to_string(),
+            commit: "0000000000000000000000000000000000000000".to_string(),
+            parent: "".to_string(),
+            method: JoinMethod::Merge,
+            cmdver: "0.0.0".to_string(),
+        };
+
+        std::fs::write(root.join("vendor/foo/.gitrepo"), gitrepo.format()).expect("write .gitrepo");
+        git_stdout(root, &["add", "--", "vendor/foo/.gitrepo"]);
+        git_stdout(root, &["commit", "-m", "add subrepo", "--quiet"]);
+
+        let intro_hex = git_stdout(root, &["rev-parse", "HEAD"]);
+        let intro = parse_object_id(&intro_hex).expect("parse intro id");
+
+        std::fs::write(root.join("vendor/foo/file"), "hello\n").expect("write file");
+        git_stdout(root, &["add", "--", "vendor/foo/file"]);
+        git_stdout(root, &["commit", "-m", "local patch", "--quiet"]);
+
+        gitrepo.parent = intro_hex.clone();
+        std::fs::write(root.join("vendor/foo/.gitrepo"), gitrepo.format()).expect("write .gitrepo");
+        git_stdout(root, &["add", "--", "vendor/foo/.gitrepo"]);
+        git_stdout(root, &["commit", "-m", "set parent", "--quiet"]);
+
+        git_stdout(root, &["checkout", "--orphan", "orphan", "--quiet"]);
+        let _ = std::fs::remove_dir_all(root.join("vendor"));
+        std::fs::write(root.join("orphan.txt"), "orphan\n").expect("write orphan");
+        git_stdout(root, &["add", "--", "orphan.txt"]);
+        git_stdout(root, &["commit", "-m", "orphan", "--quiet"]);
+        let orphan_hex = git_stdout(root, &["rev-parse", "HEAD"]);
+
+        git_stdout(root, &["checkout", "main", "--quiet", "--force"]);
+
+        git_stdout(
+            root,
+            &[
+                "update-ref",
+                "refs/subrepo/vendor/foo/sync",
+                orphan_hex.as_str(),
+            ],
+        );
+
+        let repo = gix::discover(root).expect("discover repo");
+        let refs = SubrepoRefs::new("vendor/foo");
+
+        let args = PatchesArgs {
+            subdir: None,
+            all: false,
+            all_all: false,
+            since: None,
+            from_ref: None,
+            since_sync: false,
+            style: PatchesStyle::Oneline,
+            reverse: false,
+        };
+
+        let base =
+            resolve_patches_base(root, &repo, "vendor/foo", &refs, &args).expect("resolve base");
+
+        assert_eq!(base.source, PatchesBaseSource::GitRepoParent);
+        assert_eq!(base.id, intro);
+    }
+}
+
+fn is_ancestor(repo_root: &Path, ancestor: gix::ObjectId, head: gix::ObjectId) -> Result<bool> {
+    let ancestor_hex = ancestor.to_string();
+    let head_hex = head.to_string();
+
+    let args = [
+        "merge-base",
+        "--is-ancestor",
+        ancestor_hex.as_str(),
+        head_hex.as_str(),
+    ];
+    let out = git_cli::run_raw(repo_root, &args)?;
+
+    match out.status.code() {
+        Some(0) => Ok(true),
+        Some(1) => Ok(false),
+        _ => Err(Error::user(git_cli::command_failed(&args))),
+    }
 }
 
 fn update_sync_ref(repo: &gix::Repository, refs: &SubrepoRefs, base: gix::ObjectId) -> Result<()> {
@@ -674,7 +828,13 @@ pub fn clean(args: CleanArgs) -> Result<Vec<String>> {
     let subref = subdir::encode_subdir(&subdir)?;
     let refs = SubrepoRefs::new(&subref);
 
-    remove_worktree(&state.workdir, &refs.branch, "clean")?;
+    remove_worktree(
+        &state.workdir,
+        &refs.branch,
+        "clean",
+        args.force,
+        Some(subdir.as_str()),
+    )?;
 
     let mut removed = Vec::new();
 
@@ -793,7 +953,7 @@ pub fn branch(args: BranchArgs) -> Result<String> {
     }
 
     if args.force {
-        delete_branch_and_worktree(&repo, &state, &refs.branch, "branch")?;
+        delete_branch_and_worktree(&repo, &state, &subdir, &refs.branch, "branch")?;
     }
 
     if repo
@@ -920,7 +1080,7 @@ pub fn pull(args: PullArgs) -> Result<String> {
         ));
     }
 
-    delete_branch_and_worktree(&repo, &state, &refs.branch, "pull")?;
+    delete_branch_and_worktree(&repo, &state, &subdir, &refs.branch, "pull")?;
 
     let created =
         create_subrepo_branch_and_worktree(&repo, &state, &subdir, &refs, &gitrepo, None)?;
@@ -936,7 +1096,35 @@ pub fn pull(args: PullArgs) -> Result<String> {
     };
 
     if !merge_res.status.success() {
-        return Err(Error::user("The \"git merge\" command failed:"));
+        let action = match gitrepo.method {
+            JoinMethod::Rebase => "rebase",
+            JoinMethod::Merge => "merge",
+        };
+
+        let stdout =
+            truncate_for_error(String::from_utf8_lossy(&merge_res.stdout).trim_end(), 4096);
+        let stderr =
+            truncate_for_error(String::from_utf8_lossy(&merge_res.stderr).trim_end(), 4096);
+
+        let continue_cmd = match gitrepo.method {
+            JoinMethod::Rebase => "rebase --continue",
+            JoinMethod::Merge => "commit",
+        };
+
+        return Err(Error::user(format!(
+            "The \"git {action}\" command failed.\n\n\
+Resolve conflicts in the linked worktree:\n\
+  cd {worktree}\n\
+  git status\n\
+  git add -A\n\
+  git {continue_cmd}\n\n\
+Then finalize in the original repo:\n\
+  git subrepo commit {subdir}\n\
+  git subrepo clean {subdir}\n\n\
+stdout:\n{stdout}\n\n\
+stderr:\n{stderr}",
+            worktree = created.worktree_display,
+        )));
     }
 
     let branch_tip = git_rev_parse_commit(&state.workdir, refs.branch.as_str())?;
@@ -1036,22 +1224,47 @@ pub fn push(args: PushArgs) -> Result<String> {
         }
     }
 
-    delete_branch_and_worktree(&repo, &state, &refs.branch, "push")?;
+    let worktree_paths = subrepo_worktree_paths(&state.workdir, refs.branch.as_str())?;
 
-    let parent_override = if args.squash {
-        Some(git_rev_parse_commit(&state.workdir, "HEAD^")?)
+    let created = if worktree_paths.worktree_abs.exists() {
+        let branch_ref = format!("refs/heads/{}", refs.branch);
+        let has_branch = git_cli::run_raw(
+            &state.workdir,
+            &["show-ref", "--verify", "--quiet", branch_ref.as_str()],
+        )?;
+
+        if !has_branch.status.success() {
+            return Err(Error::user(format!(
+                "Found leftover linked worktree '{worktree}', but branch '{branch}' does not exist.\n\
+Discard it with:\n\
+  git subrepo clean --force {subdir}\n",
+                worktree = worktree_paths.worktree_display,
+                branch = refs.branch,
+            )));
+        }
+
+        CreatedBranch {
+            worktree_abs: worktree_paths.worktree_abs,
+            worktree_display: worktree_paths.worktree_display,
+        }
     } else {
-        None
-    };
+        delete_branch_and_worktree(&repo, &state, &subdir, &refs.branch, "push")?;
 
-    let created = create_subrepo_branch_and_worktree(
-        &repo,
-        &state,
-        &subdir,
-        &refs,
-        &gitrepo,
-        parent_override,
-    )?;
+        let parent_override = if args.squash {
+            Some(git_rev_parse_commit(&state.workdir, "HEAD^")?)
+        } else {
+            None
+        };
+
+        create_subrepo_branch_and_worktree(
+            &repo,
+            &state,
+            &subdir,
+            &refs,
+            &gitrepo,
+            parent_override,
+        )?
+    };
 
     if matches!(gitrepo.method, JoinMethod::Rebase) {
         if upstream_head.is_some() {
@@ -1060,7 +1273,26 @@ pub fn push(args: PushArgs) -> Result<String> {
                 &["rebase", refs.refs_fetch.as_str(), refs.branch.as_str()],
             )?;
             if !res.status.success() {
-                return Err(Error::user("The \"git rebase\" command failed:"));
+                let stdout =
+                    truncate_for_error(String::from_utf8_lossy(&res.stdout).trim_end(), 4096);
+                let stderr =
+                    truncate_for_error(String::from_utf8_lossy(&res.stderr).trim_end(), 4096);
+
+                return Err(Error::user(format!(
+                    "The \"git rebase\" command failed.\n\n\
+Resolve conflicts in the linked worktree:\n\
+  cd {worktree}\n\
+  git status\n\
+  git add -A\n\
+  git rebase --continue\n\n\
+Then re-run:\n\
+  git subrepo push {subdir}\n\n\
+To discard the linked worktree:\n\
+  git subrepo clean --force {subdir}\n\n\
+stdout:\n{stdout}\n\n\
+stderr:\n{stderr}",
+                    worktree = created.worktree_display,
+                )));
             }
         }
     }
@@ -1069,7 +1301,7 @@ pub fn push(args: PushArgs) -> Result<String> {
 
     if let Some(upstream_head) = upstream_head {
         if tip == upstream_head {
-            delete_branch_and_worktree(&repo, &state, &refs.branch, "push")?;
+            delete_branch_and_worktree(&repo, &state, &subdir, &refs.branch, "push")?;
             return Ok(format!("Subrepo '{subdir}' has no new commits to push."));
         }
 
@@ -1098,7 +1330,7 @@ pub fn push(args: PushArgs) -> Result<String> {
         .into_subrepo_result()?;
     }
 
-    delete_branch_and_worktree(&repo, &state, &refs.branch, "push")?;
+    delete_branch_and_worktree(&repo, &state, &subdir, &refs.branch, "push")?;
 
     if !persist {
         return Ok(format!(
@@ -1376,27 +1608,63 @@ fn delete_ref_if_exists(repo: &gix::Repository, name: &str) -> Result<bool> {
 fn delete_branch_and_worktree(
     repo: &gix::Repository,
     state: &RepoState,
+    subdir: &str,
     branch: &str,
     command: &str,
 ) -> Result<()> {
-    remove_worktree(&state.workdir, branch, command)?;
+    remove_worktree(&state.workdir, branch, command, false, Some(subdir))?;
     let _ = delete_ref_if_exists(repo, &format!("refs/heads/{branch}"))?;
     Ok(())
 }
 
-fn assert_worktree_is_clean(worktree: &Path, command: &str) -> Result<()> {
+fn truncate_for_error(s: &str, max_bytes: usize) -> String {
+    if s.len() <= max_bytes {
+        return s.to_string();
+    }
+
+    let mut end = 0;
+    for (idx, _) in s.char_indices() {
+        if idx > max_bytes {
+            break;
+        }
+        end = idx;
+    }
+
+    let mut out = s[..end].to_string();
+    out.push_str("\n...[truncated]\n");
+    out
+}
+
+fn clean_force_hint(subdir: Option<&str>) -> String {
+    match subdir {
+        Some(s) => format!(
+            "\nIf this is a leftover linked worktree, discard it with:\n  git subrepo clean --force {s}\n",
+        ),
+        None => "".to_string(),
+    }
+}
+
+fn assert_worktree_is_clean(worktree: &Path, command: &str, subdir: Option<&str>) -> Result<()> {
     let pwd = worktree.display();
 
     // Keep behavior aligned with upstream: don't consider untracked files.
-    let _ = git_cli::run_or_command_failed(
+    let refresh = git_cli::run(
         worktree,
         &["update-index", "-q", "--ignore-submodules", "--refresh"],
     )?;
+    if !refresh.status.success() {
+        let stderr = truncate_for_error(refresh.stderr.trim_end(), 4096);
+        let hint = clean_force_hint(subdir);
+        return Err(Error::user(format!(
+            "Can't {command} subrepo. Working tree is not clean. ({pwd})\n\n{stderr}{hint}"
+        )));
+    }
 
     let diff = git_cli::run_raw(worktree, &["diff-files", "--quiet", "--ignore-submodules"])?;
     if !diff.status.success() {
+        let hint = clean_force_hint(subdir);
         return Err(Error::user(format!(
-            "Can't {command} subrepo. Unstaged changes. ({pwd})"
+            "Can't {command} subrepo. Unstaged changes. ({pwd}){hint}"
         )));
     }
 
@@ -1405,8 +1673,9 @@ fn assert_worktree_is_clean(worktree: &Path, command: &str) -> Result<()> {
         &["diff-index", "--quiet", "--ignore-submodules", "HEAD"],
     )?;
     if !diff.status.success() {
+        let hint = clean_force_hint(subdir);
         return Err(Error::user(format!(
-            "Can't {command} subrepo. Working tree has changes. ({pwd})"
+            "Can't {command} subrepo. Working tree has changes. ({pwd}){hint}"
         )));
     }
 
@@ -1421,18 +1690,27 @@ fn assert_worktree_is_clean(worktree: &Path, command: &str) -> Result<()> {
         ],
     )?;
     if !diff.status.success() {
+        let hint = clean_force_hint(subdir);
         return Err(Error::user(format!(
-            "Can't {command} subrepo. Index has changes. ({pwd})"
+            "Can't {command} subrepo. Index has changes. ({pwd}){hint}"
         )));
     }
 
     Ok(())
 }
 
-fn remove_worktree(repo_root: &Path, branch: &str, command: &str) -> Result<()> {
+fn remove_worktree(
+    repo_root: &Path,
+    branch: &str,
+    command: &str,
+    force: bool,
+    subdir: Option<&str>,
+) -> Result<()> {
     let paths = subrepo_worktree_paths(repo_root, branch)?;
     if paths.worktree_abs.exists() {
-        assert_worktree_is_clean(&paths.worktree_abs, command)?;
+        if !force {
+            assert_worktree_is_clean(&paths.worktree_abs, command, subdir)?;
+        }
         std::fs::remove_dir_all(&paths.worktree_abs)?;
     }
 
@@ -1889,7 +2167,13 @@ fn commit_subrepo_to_mainline(
     )?;
 
     // Remove the linked worktree, indicating the operation is complete.
-    remove_worktree(&state.workdir, &refs.branch, opts.command)?;
+    remove_worktree(
+        &state.workdir,
+        &refs.branch,
+        opts.command,
+        false,
+        Some(subdir),
+    )?;
 
     repo.reference(
         refs.refs_commit.as_str(),
