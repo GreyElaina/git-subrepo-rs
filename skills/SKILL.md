@@ -3,7 +3,7 @@ name: git-subrepo
 description: >
   Provides step-by-step usage guidance for the git-subrepo CLI tool (git subrepo command).
   Use when the user wants to clone, pull, push, fetch, branch, commit,
-  init, clean, or configure a subrepo; or when diagnosing subrepo errors
+  init, clean, patches, or configure a subrepo; or when diagnosing subrepo errors
   or conflicts.
 ---
 
@@ -41,7 +41,10 @@ Typical use-cases:
 - **Subrepo directory**: the subdirectory that contains the vendored repository.
 - **`.gitrepo`**: INI-like metadata file stored at `<subdir>/.gitrepo`.
 - **Join method**: how the subrepo branch is joined with upstream during `pull`/`push` workflows (`merge` or `rebase`).
-- **Linked worktree**: on conflicts, a linked worktree is created under `<git-common-dir>/tmp/subrepo/<subref>` to resolve conflicts.
+- **Linked worktree**: on conflicts, a linked worktree is created under `<git-common-dir>/tmp/subrepo/<subref>`.
+
+  If a conflict occurs, `pull`/`push` will stop and you must resolve conflicts in the linked worktree.
+  After that you finalize from the original repo via `git subrepo commit` and `git subrepo clean`.
 
 ### `.gitrepo` example
 
@@ -65,7 +68,7 @@ Field meanings:
 - `remote`: upstream URL
 - `branch`: upstream branch
 - `commit`: last synced upstream commit SHA
-- `parent`: mainline commit SHA that performed the last sync
+- `parent`: mainline commit SHA that performed the last sync (used as a stable base for patch listing and branch reconstruction)
 - `method`: `merge` or `rebase`
 
 ## Common workflows
@@ -106,6 +109,12 @@ git subrepo push <subdir> --remote <remote-url>
 git subrepo pull <subdir>
 ```
 
+If you want to override the tracked upstream remote/branch and persist it into `.gitrepo`:
+
+```bash
+git subrepo pull <subdir> --remote <remote-url> --branch <branch> --update
+```
+
 If the operation conflicts, resolve in the linked worktree and then finalize:
 
 ```bash
@@ -144,6 +153,19 @@ git subrepo commit <subdir>
 git subrepo clean <subdir>
 ```
 
+### Discard a leftover/conflicted linked worktree
+
+If a previous `pull`/`push` stopped mid-merge/rebase and left a conflicted linked worktree around, you can discard it:
+
+```bash
+git subrepo clean --force <subdir>
+```
+
+This is useful when:
+
+- you want to abandon the in-progress conflict resolution, or
+- a subsequent `pull`/`push` fails because it cannot remove a dirty linked worktree.
+
 ## History model
 
 ### Mainline commits are squashed
@@ -158,11 +180,9 @@ git log refs/subrepo/<subref>/fetch
 
 ### Push reconstructs a branch
 
-`push` internally runs `git subrepo branch` to scan mainline history and
-reconstruct individual commits, then pushes that branch upstream.
+`push` internally runs `git subrepo branch` to scan mainline history and reconstruct individual commits, then pushes that branch upstream.
 
-This means **mainline rebases that touch `<subdir>/` will invalidate the
-`parent` field** — see [Known pitfalls](#known-pitfalls).
+This means mainline rebases that touch `<subdir>/` can invalidate the `.gitrepo` `parent` field.
 
 ## Command reference
 
@@ -250,16 +270,20 @@ This command prints the base commit (not counted as a patch), followed by the lo
 
 If `SUBDIR` is omitted, this command lists patches for all top-level subrepos (equivalent to `--all`).
 
-Base selection order:
+Base selection (high level):
 
 - `--since <rev>`
 - `--from-ref <ref>`
-- `refs/subrepo/<subref>/sync` if present
-- otherwise, initialize `sync` from `SUBDIR/.gitrepo` (`subrepo.parent`)
-- fallback to commit-message anchor
+- if `refs/subrepo/<subref>/sync` exists and is an ancestor of `HEAD`, use it
+- otherwise, if `<subdir>/.gitrepo` has `parent` and it is an ancestor of `HEAD`, use it (and update `refs/.../sync`)
+- fallback to a sync-anchor commit-message (last `git subrepo pull|clone|commit` affecting `<subdir>`)
+- fallback to the commit that introduced `<subdir>/.gitrepo`
 
 Common options:
 
+- `--since <rev>`
+- `--from-ref <ref>`
+- `--since-sync`
 - `--style <oneline|decorate|stat|name-status>`
 - `--reverse`
 
@@ -271,7 +295,7 @@ Common options:
 
 ## Known pitfalls
 
-- **Mainline rebase breaks push**: if mainline commits touching `<subdir>/` are rebased after a `pull`, the `.gitrepo` `parent` field can become stale and `push` may fail. Fix: update `parent` in `.gitrepo` or run:
+- **Mainline rebase breaks push/patches base**: if mainline commits touching `<subdir>/` are rebased after a `pull`, the `.gitrepo` `parent` field can become stale and `push` may fail or `patches` base selection may fall back. Fix by updating `parent`:
 
   ```bash
   git subrepo config <subdir> parent <sha> --force
@@ -284,8 +308,6 @@ Common options:
   git subrepo clean <subdir>
   ```
 
-  Skipping `clean` can leave stale refs/worktrees.
-
 - **`init` without `--remote`**: `init` without `--remote` creates a `.gitrepo` with no upstream configured; `pull`/`push` will fail until you configure it:
 
   ```bash
@@ -293,15 +315,13 @@ Common options:
   git subrepo config <subdir> branch <branch> --force
   ```
 
-- **Nested subrepos are not supported.** `status --all` and `clean --all`
-  can discover all subrepos recursively, but workflows involving
-  subrepos-within-subrepos are undefined.
+- **Nested subrepos are not supported.** `status --all` and `clean --all` can discover all subrepos recursively, but workflows involving subrepos-within-subrepos are undefined.
 
 ## Working tree safety (non-ignored untracked files)
 
-When updating `<subdir>/` contents (e.g. `clone`, `pull`, `commit`), `git subrepo` aborts if a checkout would overwrite a **non-ignored untracked** path under `<subdir>/`.
+When updating `<subdir>/` contents (e.g. `clone`, `pull`, `commit`), `git subrepo` aborts if a checkout would overwrite a non-ignored untracked path under `<subdir>/`.
 
-If non-ignored untracked files exist but would *not* be overwritten, `git subrepo` emits an advisory warning (non-fatal) instead of aborting.
+If non-ignored untracked files exist but would not be overwritten, `git subrepo` emits an advisory warning (non-fatal).
 
 Force operations allow overwriting.
 
